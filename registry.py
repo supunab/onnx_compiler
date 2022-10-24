@@ -5,6 +5,7 @@ import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
 from aitemplate.frontend import nn
+from utils import clean_name
 
 def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
     d = {}
@@ -32,7 +33,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         op_func = getattr(ops, op_name)
         inputA = context.get_tensor(node.input[0])
         inputB = context.get_tensor(node.input[1])
-        output_name = node.output[0]
+        output_name = clean_name(node.output[0])
 
         if (len(node.input) == 3):
             inputC = context.get_tensor(node.input[2])
@@ -48,7 +49,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
     elif op_type == "Relu":
         input = context.get_tensor(node.input[0])
-        output_name = node.output[0]
+        output_name = clean_name(node.output[0])
         output = ops.relu(input)
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -56,7 +57,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
     elif op_type == "Softmax":
         input = context.get_tensor(node.input[0])
         axis = int(attributes["axis"].i)
-        output_name = node.output[0]
+        output_name = clean_name(node.output[0])
         output = ops.softmax()(input, axis)
         output._attrs["name"] = output_name
         context.add_tensor(output)

@@ -1,2 +1,3 @@
 *.onnx
 tmp/*
+__pycache__/*

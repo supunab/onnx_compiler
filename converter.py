@@ -9,6 +9,7 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext
 from registry import process_node
+from utils import clean_name
 
 
 def extract_shape(onnx_value: onnx.ValueInfoProto) -> list[int]:
@@ -31,14 +32,14 @@ def extract_type(onnx_value: onnx.ValueInfoProto) -> str:
 
 
 def create_tensor_from_onnx_value(onnx_value: onnx.ValueInfoProto) -> Tensor:
-    name = onnx_value.name
+    name = clean_name(onnx_value.name)
     shape = extract_shape(onnx_value)
     dtype = extract_type(onnx_value)
     return Tensor(shape=shape, name=name, dtype=dtype)
     
 
 def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
-    name = onnx_init.name
+    name = clean_name(onnx_init.name)
     shape = list(onnx_init.dims)
     dtype = map_type(onnx_init.data_type)
     return Tensor(shape=shape, name=name, dtype=dtype)

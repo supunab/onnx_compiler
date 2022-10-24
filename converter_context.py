@@ -1,12 +1,13 @@
 from __future__ import annotations
 import onnx
 from aitemplate.frontend import Tensor
+from utils import clean_name
 
 ## keeps track of the processed tensors
 class ConverterContext:
     def __init__(self, graph: onnx.GraphProto) -> None:
         self.tensors = {}
-        self.outputs = list(map(lambda t: t.name, graph.output))
+        self.outputs = list(map(lambda t: clean_name(t.name), graph.output))
 
     def add_tensor(self, tensor: Tensor) -> None:
         name = tensor._attrs["name"]
@@ -19,7 +20,7 @@ class ConverterContext:
             raise ValueError("Adding a tensor with a name used before")
 
     def get_tensor(self, name: str) -> Tensor:
-        return self.tensors[name]
+        return self.tensors[clean_name(name)]
 
     def get_final_output(self) -> Tensor:
         # TODO: what is there are more outputs?
