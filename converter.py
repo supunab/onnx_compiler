@@ -79,6 +79,7 @@ def convert(model: onnx.ModelProto):
     # tracing is done, compile the model
     output = context.get_final_output()
     target = detect_target()
-    compile_model(output, target, "./tmp", "test_model")
+    # compile_model(output, target, "./tmp", "test_model")
+    return context
 
     

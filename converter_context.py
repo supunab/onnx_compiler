@@ -1,4 +1,5 @@
 from __future__ import annotations
+from unicodedata import name
 import onnx
 from aitemplate.frontend import Tensor
 from utils import clean_name
@@ -8,6 +9,8 @@ class ConverterContext:
     def __init__(self, graph: onnx.GraphProto) -> None:
         self.tensors = {}
         self.outputs = list(map(lambda t: clean_name(t.name), graph.output))
+        self.inputs = list(map(lambda t: clean_name(t.name), graph.input))
+        self.initializers = list(map(lambda t: clean_name(t.name), graph.initializer))
 
     def add_tensor(self, tensor: Tensor) -> None:
         name = tensor._attrs["name"]
@@ -26,3 +29,16 @@ class ConverterContext:
         # TODO: what is there are more outputs?
         assert len(self.outputs) == 1, "Only support cases where there's only one output"
         return self.tensors[self.outputs[0]]
+
+    def get_inputs_and_constants(self) -> list[Tensor]:
+        return list(map(lambda t: self.tensors[t], self.inputs)) \
+                     + list(map(lambda t: self.tensors[t], self.initializers))
+
+    def get_all_outputs(self) -> list[Tensor]:
+        return list(map(lambda t: self.tensors[t], self.outputs))
+
+    def get_constants(self) -> list[Tensor]:
+        return list(map(lambda t: self.tensors[t], self.initializers))
+
+    def get_inputs(self) -> list[Tensor]:
+        return list(map(lambda t: self.tensors[t], self.inputs))

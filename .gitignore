@@ -1,3 +1,7 @@
 *.onnx
 tmp/*
 __pycache__/*
+
+# generated files
+ort_ait_custom_op_library.cu 
+ort_ait_custom_op_library.h
