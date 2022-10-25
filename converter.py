@@ -45,7 +45,7 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
     return Tensor(shape=shape, name=name, dtype=dtype)
 
 
-def convert(model: onnx.ModelProto):
+def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model"):
     graph = model.graph
     context = ConverterContext(graph)
 
@@ -79,7 +79,7 @@ def convert(model: onnx.ModelProto):
     # tracing is done, compile the model
     output = context.get_final_output()
     target = detect_target()
-    # compile_model(output, target, "./tmp", "test_model")
+    compile_model(output, target, output_dir, model_name)
     return context
 
     

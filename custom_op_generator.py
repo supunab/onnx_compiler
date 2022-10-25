@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 from templates.custom_op import *
 from converter_context import ConverterContext
@@ -7,7 +8,7 @@ import onnx
 from onnx import helper, save
 
 # generate the .cu and .h file required for the custom op
-def generate(context: ConverterContext):
+def generate(context: ConverterContext, folder: str):
     outputs = context.get_all_outputs()
     constants = context.get_constants()
     inputs = context.get_inputs()
@@ -35,7 +36,7 @@ def generate(context: ConverterContext):
             GET_INPUT_DATA_PTR_BODY_LINE.render(name = name)
         )
         init_ait_data_body.append(
-            INIT_AIT_DATA_BODY_LINE.render(name = name)
+            INIT_AIT_DATA_INPUT_BODY_LINE.render(name = name)
         )
         i += 1
 
@@ -65,7 +66,7 @@ def generate(context: ConverterContext):
             GET_OUTPUT_DATA_PTR_BODY_LINE.render(name = name)
         )
         init_ait_data_body.append(
-            INIT_AIT_DATA_BODY_LINE.render(name = name)
+            INIT_AIT_DATA_OUTPUT_BODY_LINE.render(name = name)
         )
         output_shapes_list.append(
             name + "_shape_data"
@@ -116,11 +117,11 @@ def generate(context: ConverterContext):
         get_output_type_body = get_output_type_body
     )
 
-    with open("ort_ait_custom_op_library.cu", "w") as f:
+    with open(os.path.join(folder, "ort_ait_custom_op_library.cu"), "w") as f:
         f.write(source)
 
 
-def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext):
+def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str):
     # convert the original graph into a graph containing the custom op
     # reuse the inputs and initializers from the old graph
     inputs = list(old_graph.input)
@@ -150,4 +151,4 @@ def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext):
     )
 
     model = helper.make_model(graph, producer_name="ait-customop-generator")
-    save(model, "simple_converted.onnx")
+    save(model, model_path)

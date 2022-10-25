@@ -1,5 +1,4 @@
 from __future__ import annotations
-from unicodedata import name
 import onnx
 from aitemplate.frontend import Tensor
 from utils import clean_name

@@ -195,9 +195,17 @@ GET_OUTPUT_DATA_PTR_BODY_LINE = jinja2.Template(
 )
 
 # TODO(supuna): dtype hardcoded in AIT
-INIT_AIT_DATA_BODY_LINE = jinja2.Template(
+INIT_AIT_DATA_INPUT_BODY_LINE = jinja2.Template(
     """
 auto {{name}}_shape_ait = AITemplateParamShape({{name}}_shape.data(), {{name}}_shape.size());
+auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::kHalf); // TODO(supuna): dtype hardcoded
+    """
+)
+
+# TODO(supuna): dtype hardcoded in AIT
+INIT_AIT_DATA_OUTPUT_BODY_LINE = jinja2.Template(
+    """
+auto {{name}}_shape_ait = AITemplateParamShape({{name}}_shape_data, {{name}}_rank);
 auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::kHalf); // TODO(supuna): dtype hardcoded
     """
 )
@@ -208,12 +216,12 @@ SET_AIT_CONSTANTS_BODY_LINE = jinja2.Template(
 
 #TODO: proper jinja for list
 SET_AIT_INPUTS_BODY = jinja2.Template(
-    """AITData ait_inputs[{{num_inputs}}] = { {{inputs}} };"""
+    """AITData ait_inputs[{{num_inputs}}] = { {{inputs}}_tensor_ait };"""
 )
 
 #TODO: proper jinja for list
 SET_AIT_OUTPUTS_BODY = jinja2.Template(
-    """AITData ait_outputs[{{num_outputs}}] = { {{outputs}} };"""
+    """AITData ait_outputs[{{num_outputs}}] = { {{outputs}}_tensor_ait };"""
 )
 
 #TODO: proper jinja for list
