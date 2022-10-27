@@ -1,3 +1,4 @@
+.vscode
 *.onnx
 tmp/*
 __pycache__/*

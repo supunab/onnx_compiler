@@ -9,27 +9,16 @@ TODO(supuna): I still get the following error if I use onnxruntime directly from
 onnxruntime.capi.onnxruntime_pybind11_state.InvalidGraph: [ONNXRuntimeError] : 10 : INVALID_GRAPH : This is an invalid model. Type Error: Type 'tensor(float)' ....
 """
 import onnxruntime as ort
-import onnx
 import numpy as np
-import torch
 from simple_onnx_model import SimpleModel, test_pytorch
 
-if __name__ == "__main__":
-    shared_library = "./../tmp/test_model/test.so"
-    model_path = "./../simple_converted.onnx"
-
+def run_onnx_model(model_path: str, input_np: np.ndarray, shared_lib: bool = False, shared_lib_path: str = ""):
+    from constants import input_size, hidden_size, output_size, batch_size
     session_options = ort.SessionOptions()
-    session_options.register_custom_ops_library(shared_library)
-    onnx_model = onnx.load_model(model_path)
+    if shared_lib:
+        session_options.register_custom_ops_library(shared_lib_path)
     session = ort.InferenceSession(model_path, sess_options=session_options, providers=["CUDAExecutionProvider"])
 
-    # setup data
-    input_size = 10
-    hidden_size = 25
-    output_size = 5
-    batch_size = 8
-
-    input_np = np.random.rand(batch_size, input_size).astype(np.float16)
     input_ort = ort.OrtValue.ortvalue_from_numpy(input_np, "cuda", 0)
 
     output_ort = ort.OrtValue.ortvalue_from_shape_and_type((batch_size, output_size), np.float16, "cuda", 0)
@@ -45,12 +34,25 @@ if __name__ == "__main__":
                         element_type=np.float16, shape=output_ort.shape(), buffer_ptr=output_ort.data_ptr())
 
     session.run_with_iobinding(io_binding)
-    ait_output = output_ort.numpy()
-    pt_output = test_pytorch(input_size, hidden_size, output_size, input_np)
+    return output_ort.numpy()
 
-    # print(ait_output)
+if __name__ == "__main__":
+    shared_library = "./../../tmp/test_model/test.so"
+    model_path = "./simple_converted.onnx"
+    original_model_path = "./simple.onnx"
+
+    from constants import input_size, batch_size
+    # use same input for all variants
+    input_np = np.random.rand(batch_size, input_size).astype(np.float16)
+
+    ort_output = run_onnx_model(original_model_path, input_np)
+    ait_custom_op_output = run_onnx_model(model_path, input_np, True, shared_library)
+    pt_output = test_pytorch(input_np)
+
+    # print(ort_output)
+    # print(ait_custom_op_output)
     # print(pt_output)
-    equal = np.allclose(ait_output, pt_output, atol=1e-1)
+    equal = np.allclose(ait_custom_op_output, pt_output, atol=1e-1) and  np.allclose(ait_custom_op_output, ort_output, atol=1e-1)
     if equal:
         print("Outputs matched! (to a 0.1 tolerenace")
     else:

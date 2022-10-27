@@ -4,8 +4,8 @@ from converter import compile
 from custom_op_generator import generate, convert_graph
 
 if __name__ == "__main__":
-    onnx_model = "test/simple.onnx"
-    converted_model_path = "test/simple_converted.onnx"
+    onnx_model = "test/simple_model/simple.onnx"
+    converted_model_path = "test/simple_model/simple_converted.onnx"
     compile_folder = "./tmp"
     model_name = "test_model"
 

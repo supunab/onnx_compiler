@@ -121,7 +121,7 @@ def generate(context: ConverterContext, folder: str):
         f.write(source)
 
 
-def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str, special_inits: dict):
+def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str, special_inits: dict = {}):
     """
     args:
         special_inits (dict[str, TensorProto]): this is for a some special cases test/stable_diffusion/stable_diffusion_test.py
