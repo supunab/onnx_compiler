@@ -33,13 +33,7 @@ if __name__ == "__main__":
     input_ort = ort.OrtValue.ortvalue_from_numpy(input_np, "cuda", 0)
 
     output_ort = ort.OrtValue.ortvalue_from_shape_and_type((batch_size, output_size), np.float16, "cuda", 0)
-
-    # TODO: weights already stored in the onnx model should work as well?
-    # initializers (weights)
-    # dense1weight = np.random.rand(input_size, hidden_size).astype(np.float16)
-    # dense1bias = np.random.rand(hidden_size).astype(np.float16)
-    # dense2weight = np.random.rand(input_size, hidden_size).astype(np.float16)
-    # dense2bias = np.random.rand(hidden_size).astype(np.float16)
+    # note - weights for initializers is already in the onnx graph
 
     io_binding = session.io_binding()
     input_name = session.get_inputs()[0].name
@@ -53,6 +47,11 @@ if __name__ == "__main__":
     session.run_with_iobinding(io_binding)
     ait_output = output_ort.numpy()
     pt_output = test_pytorch(input_size, hidden_size, output_size, input_np)
-    print(ait_output)
-    print(pt_output)
 
+    # print(ait_output)
+    # print(pt_output)
+    equal = np.allclose(ait_output, pt_output, atol=1e-1)
+    if equal:
+        print("Outputs matched! (to a 0.1 tolerenace")
+    else:
+        print("ERROR! outputs are different!")

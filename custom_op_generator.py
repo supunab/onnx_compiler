@@ -121,16 +121,37 @@ def generate(context: ConverterContext, folder: str):
         f.write(source)
 
 
-def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str):
+def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str, special_inits: dict):
+    """
+    args:
+        special_inits (dict[str, TensorProto]): this is for a some special cases test/stable_diffusion/stable_diffusion_test.py
+    """
     # convert the original graph into a graph containing the custom op
     # reuse the inputs and initializers from the old graph
     inputs = list(old_graph.input)
-    initializers = list(old_graph.initializer)
     outputs = list(old_graph.output)
 
     input_names = list(map(lambda x: x.name, inputs))
-    initializer_names = list(map(lambda x: x.name, initializers))
     output_names = list(map(lambda x: x.name, outputs))
+
+    # context.initializers already contain the updated list of init names
+    initializer_names = context.initializers
+
+    # retrive the TensorProtos from old inits or special_inits as necessary
+    init2tensor_proto = {}
+    for init in old_graph.initializer:
+        if not init.name in special_inits:
+            init2tensor_proto[init.name] = init
+    
+    # create the initializer list in the same order as initializer_name
+    # (don't think this is required though)
+    initializers = []
+    for init_name in initializer_names:
+        if init_name in special_inits:
+            initializers.append(special_inits[init_name])
+        else:
+            initializers.append(init2tensor_proto[init.name])
+
     # note - this ordering has to match the ordering in the generated code because we 
     #        retrieve inputs+initializers using positional indexes
 

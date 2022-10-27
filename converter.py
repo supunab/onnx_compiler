@@ -45,7 +45,7 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
     return Tensor(shape=shape, name=name, dtype=dtype)
 
 
-def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model"):
+def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False):
     graph = model.graph
     context = ConverterContext(graph)
 
@@ -71,15 +71,22 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
         tensor = create_tensor_from_onnx_init(init)
         # constants/weights shouldn't be marked as inputs
         context.add_tensor(tensor)
-
-    # traverse the graph (graph is already topologically sorted)
-    for node in nodes:
-        process_node(node, context)
-
-    # tracing is done, compile the model
-    output = context.get_final_output()
-    target = detect_target()
-    compile_model(output, target, output_dir, model_name)
+    
+    if not not_compile:
+        # traverse the graph (graph is already topologically sorted)
+        for node in nodes:
+            process_node(node, context)
+            
+        # tracing is done, compile the model
+        output = context.get_final_output()
+        target = detect_target()
+        compile_model(output, target, output_dir, model_name)
+    else:
+        # outputs will not be added to context since we're skipping process_node
+        # add them explicitly
+        for output in outputs:
+            tensor = create_tensor_from_onnx_value(output)
+            context.add_tensor(tensor)
     return context
 
     
