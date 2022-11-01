@@ -12,7 +12,7 @@ from onnx import helper, save
 from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
 # generate the .cu and .h file required for the custom op
-def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None):
+def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True):
     """
     output_shape -> explicitly provide the output_shape when onnx graph is incapable of inferencing
     inputs_order -> HACK! this is to assign the order in which we pass the ait input tensors to ait. Currently, has to manually
@@ -160,6 +160,17 @@ def generate(context: ConverterContext, folder: str, output_shape: dict = {}, in
 
     with open(os.path.join(folder, "ort_ait_custom_op_library.cu"), "w") as f:
         f.write(source)
+
+    # header file
+    with open(os.path.join(folder,"ort_ait_custom_op_library.h"), "w") as f:
+        f.write(CUSTOM_OP_HEADER.render())
+
+    if run_make:
+        # build the shared object
+        # cd folder && make
+        ret = os.system(f"cd {folder} && make")
+        if ret != 0:
+            raise Exception("Error: returned non-zero when trying to compile (i.e., make) the generated sources")
 
 
 def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_path: str, special_inits: dict = {}):

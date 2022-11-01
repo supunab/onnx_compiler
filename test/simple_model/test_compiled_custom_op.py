@@ -11,9 +11,13 @@ onnxruntime.capi.onnxruntime_pybind11_state.InvalidGraph: [ONNXRuntimeError] : 1
 import onnxruntime as ort
 import numpy as np
 from simple_onnx_model import SimpleModel, test_pytorch
+import torch.utils.benchmark as benchmark
+
+def _benchmark_onnx(session, io_binding):
+    session.run_with_iobinding(io_binding)
 
 def run_onnx_model(model_path: str, input_np: np.ndarray, shared_lib: bool = False, shared_lib_path: str = ""):
-    from constants import input_size, hidden_size, output_size, batch_size
+    from constants import input_size, num_layers, hidden_sizes, warm_ups, repeats
     session_options = ort.SessionOptions()
     if shared_lib:
         session_options.register_custom_ops_library(shared_lib_path)
@@ -21,7 +25,7 @@ def run_onnx_model(model_path: str, input_np: np.ndarray, shared_lib: bool = Fal
 
     input_ort = ort.OrtValue.ortvalue_from_numpy(input_np, "cuda", 0)
 
-    output_ort = ort.OrtValue.ortvalue_from_shape_and_type((batch_size, output_size), np.float16, "cuda", 0)
+    output_ort = ort.OrtValue.ortvalue_from_shape_and_type((batch_size, hidden_sizes[-1]), np.float16, "cuda", 0)
     # note - weights for initializers is already in the onnx graph
 
     io_binding = session.io_binding()
@@ -33,11 +37,19 @@ def run_onnx_model(model_path: str, input_np: np.ndarray, shared_lib: bool = Fal
     io_binding.bind_output(name=output_name, device_type=output_ort.device_name(), device_id=0, 
                         element_type=np.float16, shape=output_ort.shape(), buffer_ptr=output_ort.data_ptr())
 
-    session.run_with_iobinding(io_binding)
+    timer = benchmark.Timer(
+        stmt="_benchmark_onnx(session, io_binding)",
+        setup="from __main__ import _benchmark_onnx",
+        globals={"session": session, "io_binding" : io_binding}
+    )
+    timer.timeit(warm_ups) # warm up
+    print(f"""{"ORT (AIT Custom Op)" if shared_lib else "ORT Original"}: {timer.timeit(repeats)}""")
+
+    # session.run_with_iobinding(io_binding)
     return output_ort.numpy()
 
 if __name__ == "__main__":
-    shared_library = "./../../tmp/test_model/test.so"
+    shared_library = "./tmp/test_model/test.so"
     model_path = "./simple_converted.onnx"
     original_model_path = "./simple.onnx"
 
