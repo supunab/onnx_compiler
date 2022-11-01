@@ -28,19 +28,20 @@ def _benchmark_pt(model, input):
     model(input)
     torch.cuda.synchronize()
 
-def test_pytorch(input):
+def test_pytorch(input, bench = True):
     from constants import input_size, num_layers, hidden_sizes, warm_ups, repeats
     t = torch.tensor(input).cuda().half()
     torch.manual_seed(42) # to make sure saved weights are the same
     model = SimpleModel(input_size, num_layers, hidden_sizes).cuda().half()
     model.eval()
-    timer = benchmark.Timer(
-        stmt="_benchmark_pt(model, t)",
-        setup="from simple_onnx_model import _benchmark_pt",
-        globals={"model": model, "t": t}
-    )
-    timer.timeit(warm_ups) # warm up
-    print(f"PyTorch: {timer.timeit(repeats)}")
+    if bench:
+        timer = benchmark.Timer(
+            stmt="_benchmark_pt(model, t)",
+            setup="from simple_onnx_model import _benchmark_pt",
+            globals={"model": model, "t": t}
+        )
+        timer.timeit(warm_ups) # warm up
+        print(f"PyTorch: {timer.timeit(repeats)}")
     return model(t).detach().cpu().numpy()
 
 if __name__=="__main__":

@@ -1,9 +1,9 @@
 .vscode
 *.onnx
 tmp/*
-*/tmp/
+**/tmp/
 __pycache__/*
-*/__pycache__
+**/__pycache__
 
 # generated files
 ort_ait_custom_op_library.cu 
