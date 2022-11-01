@@ -21,7 +21,6 @@ def test_pytorch(input):
     torch.manual_seed(42) # to make sure saved weights are the same
     model = SimpleModel(input_size, hidden_size, output_size).cuda().half()
     model.eval()
-    print(model.dense1.weight.detach().cpu().numpy())
     return model(t).detach().cpu().numpy()
 
 if __name__=="__main__":

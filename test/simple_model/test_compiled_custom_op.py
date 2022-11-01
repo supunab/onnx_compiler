@@ -54,6 +54,6 @@ if __name__ == "__main__":
     # print(pt_output)
     equal = np.allclose(ait_custom_op_output, pt_output, atol=1e-1) and  np.allclose(ait_custom_op_output, ort_output, atol=1e-1)
     if equal:
-        print("Outputs matched! (to a 0.1 tolerenace")
+        print("Outputs matched! (to a 0.1 tolerenace)")
     else:
         print("ERROR! outputs are different!")

@@ -130,12 +130,12 @@ struct AITModelOp : Ort::CustomOpBase<AITModelOp, AITKernel> {
   const char* GetExecutionProviderType() const { return "CUDAExecutionProvider"; };
 
   size_t GetInputTypeCount() const { return {{input_count}}; }; 
-  ONNXTensorElementDataType GetInputType(size_t /*index*/) const { 
+  ONNXTensorElementDataType GetInputType(size_t i /*index*/) const { 
     {{get_input_type_body}}
   };
 
   size_t GetOutputTypeCount() const { return {{output_count}}; };
-  ONNXTensorElementDataType GetOutputType(size_t /*index*/) const {
+  ONNXTensorElementDataType GetOutputType(size_t i /*index*/) const {
     {{get_output_type_body}}
   };
 
@@ -198,7 +198,7 @@ GET_OUTPUT_DATA_PTR_BODY_LINE = jinja2.Template(
 INIT_AIT_DATA_INPUT_BODY_LINE = jinja2.Template(
     """
 auto {{name}}_shape_ait = AITemplateParamShape({{name}}_shape.data(), {{name}}_shape.size());
-auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::kHalf); // TODO(supuna): dtype hardcoded
+auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::{{dtype}}); // TODO(supuna): dtype hardcoded
     """
 )
 
@@ -206,7 +206,7 @@ auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplate
 INIT_AIT_DATA_OUTPUT_BODY_LINE = jinja2.Template(
     """
 auto {{name}}_shape_ait = AITemplateParamShape({{name}}_shape_data, {{name}}_rank);
-auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::kHalf); // TODO(supuna): dtype hardcoded
+auto {{name}}_tensor_ait = AITData({{name}}_data, {{name}}_shape_ait, AITemplateDtype::{{dtype}}); // TODO(supuna): dtype hardcoded
     """
 )
 
@@ -216,15 +216,23 @@ SET_AIT_CONSTANTS_BODY_LINE = jinja2.Template(
 
 #TODO: proper jinja for list
 SET_AIT_INPUTS_BODY = jinja2.Template(
-    """AITData ait_inputs[{{num_inputs}}] = { {{inputs}}_tensor_ait };"""
+    """AITData ait_inputs[{{num_inputs}}] = { {{inputs}} };"""
 )
 
 #TODO: proper jinja for list
 SET_AIT_OUTPUTS_BODY = jinja2.Template(
-    """AITData ait_outputs[{{num_outputs}}] = { {{outputs}}_tensor_ait };"""
+    """AITData ait_outputs[{{num_outputs}}] = { {{outputs}} };"""
 )
 
 #TODO: proper jinja for list
 SET_AIT_OUTPUT_SHAPES_BODY_LINE = jinja2.Template(
     """int64_t *ait_output_shapes[{{num_outputs}}] = { {{output_shapes_list}} };"""
+)
+
+GET_TYPE_BODY_FIRST_LINE = jinja2.Template(
+  """if (i == 0) return {{dtype}};"""
+)
+
+GET_TYPE_BODY_LINE = jinja2.Template(
+  """else if (i=={{id}}) return {{dtype}};"""
 )

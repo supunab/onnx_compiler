@@ -9,7 +9,7 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext
 from registry import process_node
-from utils import clean_name
+from utils import clean_name, map_type
 
 
 def extract_shape(onnx_value: onnx.ValueInfoProto) -> list[int]:
@@ -19,14 +19,9 @@ def extract_shape(onnx_value: onnx.ValueInfoProto) -> list[int]:
     for dim in onnx_shape.dim:
         shape.append(dim.dim_value)
     return shape
-
-def map_type(elem_type: int) -> str:
-    # TODO: need to map elem_type to correct type!
-    return "float16"
-
+    
 
 def extract_type(onnx_value: onnx.ValueInfoProto) -> str:
-    # TODO: hardcoded to return float16!
     elem_type = onnx_value.type.tensor_type.elem_type
     return map_type(elem_type)
 
@@ -42,6 +37,8 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
     name = clean_name(onnx_init.name)
     shape = list(onnx_init.dims)
     dtype = map_type(onnx_init.data_type)
+    if name == "onnx_Resize_8648":
+        print(f"hello hello dtype = {onnx_init.data_type}, {dtype}")
     return Tensor(shape=shape, name=name, dtype=dtype)
 
 

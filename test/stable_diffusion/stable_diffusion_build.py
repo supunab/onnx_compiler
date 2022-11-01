@@ -34,7 +34,10 @@ def special_handling(graph: onnx.GraphProto, dim: int) -> dict:
     new_inits = {}
     for init in graph.initializer:
         shape = list(init.dims)
-        if shape == 4:
+        if shape == 4: 
+            # this is because generated AIT kernel expects (batch, h, w, channel)
+            # whereas pytorch tensor is (batch, channel, h, w) 
+
             # get the raw_data as a numpy array
             dtype = map_onnx_dtype_to_numpy(init.data_type)
             np_array = np.frombuffer(init.raw_data, dtype=dtype).reshape(shape)
@@ -71,7 +74,7 @@ def special_handling(graph: onnx.GraphProto, dim: int) -> dict:
     new_inits["arange"] = helper.make_tensor("arange", TensorProto.FLOAT16, arange.shape, arange)
     # update the context
     context.initializers.append("arange")
-    context.tensors["arange"] = Tensor(shape=arange.shape, name="arange", dtype=np.float16)
+    context.tensors["arange"] = Tensor(shape=arange.shape, name="arange", dtype="float16")
     return new_inits
 
 

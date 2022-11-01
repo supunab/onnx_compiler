@@ -1,11 +1,15 @@
 from __future__ import annotations
 import os
 
+from torch import inference_mode
+
 from templates.custom_op import *
 from converter_context import ConverterContext
 
 import onnx
 from onnx import helper, save
+
+from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
 # generate the .cu and .h file required for the custom op
 def generate(context: ConverterContext, folder: str):
@@ -19,10 +23,12 @@ def generate(context: ConverterContext, folder: str):
     get_input_shapes_body = []
     get_input_data_ptr_body = []
     init_ait_data_body = []
+    get_input_type_body = []
 
     i = 0
     for input in (inputs + constants):
         name = input._attrs["name"]
+        dtype = input._attrs["dtype"]
         get_input_ort_values_body.append(
             GET_INPUT_ORT_VALUES_BODY_LINE.render(name = name, input_id = i)
         )
@@ -36,22 +42,33 @@ def generate(context: ConverterContext, folder: str):
             GET_INPUT_DATA_PTR_BODY_LINE.render(name = name)
         )
         init_ait_data_body.append(
-            INIT_AIT_DATA_INPUT_BODY_LINE.render(name = name)
+            INIT_AIT_DATA_INPUT_BODY_LINE.render(name = name, dtype=map_type_to_ait_str(dtype))
         )
+        if i==0:
+            get_input_type_body.append(
+                GET_TYPE_BODY_FIRST_LINE.render(dtype = map_type_to_onnx_str(dtype))
+            )
+        else:
+            get_input_type_body.append(
+                GET_TYPE_BODY_LINE.render(id = i, dtype = map_type_to_onnx_str(dtype))
+            )
         i += 1
 
     get_input_ort_values_body = "\n".join(get_input_ort_values_body)
     get_ort_value_info_body = "\n".join(get_ort_value_info_body)
     get_input_shapes_body = "\n".join(get_input_shapes_body)
     get_input_data_ptr_body = "\n".join(get_input_data_ptr_body)
+    get_input_type_body = "\n".join(get_input_type_body)
 
     i = 0
     output_shapes_body = []
     get_output_ort_values_body = []
     get_output_data_ptr_body = []
     output_shapes_list = []
+    get_output_type_body = []
     for output in outputs:
         name = output._attrs["name"]
+        dtype = output._attrs["dtype"]
         # TODO(supuna): dynamic shapes?
         shape = list(map(lambda x: x.value(), output.shape()))
         shape_str = str(shape)[1:-1]
@@ -66,11 +83,19 @@ def generate(context: ConverterContext, folder: str):
             GET_OUTPUT_DATA_PTR_BODY_LINE.render(name = name)
         )
         init_ait_data_body.append(
-            INIT_AIT_DATA_OUTPUT_BODY_LINE.render(name = name)
+            INIT_AIT_DATA_OUTPUT_BODY_LINE.render(name = name, dtype=map_type_to_ait_str(dtype))
         )
         output_shapes_list.append(
             name + "_shape_data"
         )
+        if i==0:
+            get_output_type_body.append(
+                GET_TYPE_BODY_FIRST_LINE.render(dtype = map_type_to_onnx_str(dtype))
+            )
+        else:
+            get_output_type_body.append(
+                GET_TYPE_BODY_LINE.render(id = i, dtype = map_type_to_onnx_str(dtype))
+            )
         i += 1
 
     set_ait_constants_body = []
@@ -81,8 +106,8 @@ def generate(context: ConverterContext, folder: str):
         )
 
     output_shapes_list = ",".join(output_shapes_list)
-    inputs_str = ",".join(map(lambda x: x._attrs["name"], inputs))
-    outputs_str = ",".join(map(lambda x: x._attrs["name"], outputs))
+    inputs_str = ",".join(map(lambda x: x._attrs["name"] + "_tensor_ait", inputs))
+    outputs_str = ",".join(map(lambda x: x._attrs["name"] + "_tensor_ait", outputs))
     set_ait_inputs_body = SET_AIT_INPUTS_BODY.render(num_inputs=len(inputs), inputs=inputs_str)
     set_ait_outputs_body = SET_AIT_OUTPUTS_BODY.render(num_outputs=len(outputs), outputs=outputs_str)
     set_ait_output_shapes_body = SET_AIT_OUTPUT_SHAPES_BODY_LINE.render(num_outputs=len(outputs), output_shapes_list=output_shapes_list)
@@ -91,12 +116,9 @@ def generate(context: ConverterContext, folder: str):
     get_output_data_ptr_body = "\n".join(get_output_data_ptr_body)
     init_ait_data_body = "\n".join(init_ait_data_body)
     set_ait_constants_body = "\n".join(set_ait_constants_body)
+    get_output_type_body = "\n".join(get_output_type_body)
     input_count = str(len(inputs) + len(constants))
     output_count = str(len(outputs))
-
-    # TODO: types are hardcoded to float16 atm
-    get_input_type_body = "return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;"
-    get_output_type_body = "return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;"
 
     source = CUSTOM_OP_SOURCE.render(
         get_input_ort_values_body = get_input_ort_values_body,
@@ -140,8 +162,11 @@ def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_p
     # retrive the TensorProtos from old inits or special_inits as necessary
     init2tensor_proto = {}
     for init in old_graph.initializer:
-        if not init.name in special_inits:
-            init2tensor_proto[init.name] = init
+        # let's use the cleaned name
+        cleaned_name = clean_name(init.name)
+        if not cleaned_name in special_inits:
+            init.name = cleaned_name
+            init2tensor_proto[cleaned_name] = init
     
     # create the initializer list in the same order as initializer_name
     # (don't think this is required though)
@@ -150,7 +175,7 @@ def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_p
         if init_name in special_inits:
             initializers.append(special_inits[init_name])
         else:
-            initializers.append(init2tensor_proto[init.name])
+            initializers.append(init2tensor_proto[init_name])
 
     # note - this ordering has to match the ordering in the generated code because we 
     #        retrieve inputs+initializers using positional indexes
@@ -172,4 +197,5 @@ def convert_graph(old_graph: onnx.GraphProto, context: ConverterContext, model_p
     )
 
     model = helper.make_model(graph, producer_name="ait-customop-generator")
+    
     save(model, model_path)
