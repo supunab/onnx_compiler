@@ -37,8 +37,6 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
     name = clean_name(onnx_init.name)
     shape = list(onnx_init.dims)
     dtype = map_type(onnx_init.data_type)
-    if name == "onnx_Resize_8648":
-        print(f"hello hello dtype = {onnx_init.data_type}, {dtype}")
     return Tensor(shape=shape, name=name, dtype=dtype)
 
 

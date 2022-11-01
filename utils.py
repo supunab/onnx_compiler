@@ -10,6 +10,9 @@ def clean_name(name: str) -> str:
         name = "_" + name
     return name
 
+def map_onnx_dtype_to_numpy(onnx_dtype: int):
+    return TENSOR_TYPE_TO_NP_TYPE[onnx_dtype]
+
 def map_type(elem_type: int) -> str:
     np_type = TENSOR_TYPE_TO_NP_TYPE[elem_type]
     # TODO: add support for types as needed!

@@ -12,7 +12,12 @@ from onnx import helper, save
 from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
 # generate the .cu and .h file required for the custom op
-def generate(context: ConverterContext, folder: str):
+def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None):
+    """
+    output_shape -> explicitly provide the output_shape when onnx graph is incapable of inferencing
+    inputs_order -> HACK! this is to assign the order in which we pass the ait input tensors to ait. Currently, has to manually
+                    look at the the model-generated.h param[0], param[1], .. shapes and make sure to pass the correct input (based on the shape)
+    """
     outputs = context.get_all_outputs()
     constants = context.get_constants()
     inputs = context.get_inputs()
@@ -70,7 +75,11 @@ def generate(context: ConverterContext, folder: str):
         name = output._attrs["name"]
         dtype = output._attrs["dtype"]
         # TODO(supuna): dynamic shapes?
+        # TODO(supuna): in some cases, shape inference fails, need to explicitly specify the output shape
         shape = list(map(lambda x: x.value(), output.shape()))
+        shape = output_shape[name] if name in output_shape else shape
+        assert not 0 in shape, "0 usually indicates, shape inference failed, probably need to explicitly provide output shape" 
+
         shape_str = str(shape)[1:-1]
         rank = len(shape)
         output_shapes_body.append(
@@ -106,7 +115,13 @@ def generate(context: ConverterContext, folder: str):
         )
 
     output_shapes_list = ",".join(output_shapes_list)
-    inputs_str = ",".join(map(lambda x: x._attrs["name"] + "_tensor_ait", inputs))
+    if inputs_order != None:
+        # reorder the inputs in a given order to match AIT order
+        assert len(set(inputs_order)) == len(inputs)
+        inputs = list(map(lambda x: x._attrs["name"] + "_tensor_ait", inputs))
+        inputs_str = ",".join([inputs[i] for i in inputs_order])
+    else:
+        inputs_str = ",".join(map(lambda x: x._attrs["name"] + "_tensor_ait", inputs))
     outputs_str = ",".join(map(lambda x: x._attrs["name"] + "_tensor_ait", outputs))
     set_ait_inputs_body = SET_AIT_INPUTS_BODY.render(num_inputs=len(inputs), inputs=inputs_str)
     set_ait_outputs_body = SET_AIT_OUTPUTS_BODY.render(num_outputs=len(outputs), outputs=outputs_str)
@@ -117,8 +132,10 @@ def generate(context: ConverterContext, folder: str):
     init_ait_data_body = "\n".join(init_ait_data_body)
     set_ait_constants_body = "\n".join(set_ait_constants_body)
     get_output_type_body = "\n".join(get_output_type_body)
-    input_count = str(len(inputs) + len(constants))
-    output_count = str(len(outputs))
+    custom_op_input_count = str(len(inputs) + len(constants))
+    custom_op_output_count = str(len(outputs))
+    num_inputs = str(len(inputs))
+    num_outputs = str(len(outputs))
 
     source = CUSTOM_OP_SOURCE.render(
         get_input_ort_values_body = get_input_ort_values_body,
@@ -133,10 +150,12 @@ def generate(context: ConverterContext, folder: str):
         set_ait_inputs_body = set_ait_inputs_body,
         set_ait_outputs_body = set_ait_outputs_body,
         set_ait_output_shapes_body = set_ait_output_shapes_body,
-        input_count = input_count,
+        custom_op_input_count = custom_op_input_count,
         get_input_type_body = get_input_type_body,
-        output_count = output_count,
-        get_output_type_body = get_output_type_body
+        custom_op_output_count = custom_op_output_count,
+        get_output_type_body = get_output_type_body,
+        num_inputs = num_inputs,
+        num_outputs = num_outputs
     )
 
     with open(os.path.join(folder, "ort_ait_custom_op_library.cu"), "w") as f:

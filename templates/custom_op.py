@@ -111,7 +111,7 @@ struct AITKernel {
     auto stream_handle = reinterpret_cast<AITemplateStreamHandle>(ort_.KernelContext_GetGPUComputeStream(context));
     
     // TODO(supuna): do we need sync = true? does ort assume that the result is computed when it's returned from a kernel?
-    AITemplateModelContainerRun(handle, ait_inputs, 1, ait_outputs, 1, stream_handle, /* sync */ true, true, ait_output_shapes);
+    AITemplateModelContainerRun(handle, ait_inputs, {{num_inputs}}, ait_outputs, {{num_outputs}}, stream_handle, /* sync */ true, true, ait_output_shapes);
   }
 
  private:
@@ -129,12 +129,12 @@ struct AITModelOp : Ort::CustomOpBase<AITModelOp, AITKernel> {
 
   const char* GetExecutionProviderType() const { return "CUDAExecutionProvider"; };
 
-  size_t GetInputTypeCount() const { return {{input_count}}; }; 
+  size_t GetInputTypeCount() const { return {{custom_op_input_count}}; }; 
   ONNXTensorElementDataType GetInputType(size_t i /*index*/) const { 
     {{get_input_type_body}}
   };
 
-  size_t GetOutputTypeCount() const { return {{output_count}}; };
+  size_t GetOutputTypeCount() const { return {{custom_op_output_count}}; };
   ONNXTensorElementDataType GetOutputType(size_t i /*index*/) const {
     {{get_output_type_body}}
   };

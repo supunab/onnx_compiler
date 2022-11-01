@@ -19,13 +19,8 @@ from onnx import helper, TensorProto
 from aitemplate.frontend import Tensor
 from custom_op_generator import convert_graph
 from custom_op_generator import generate
-
-
-def map_onnx_dtype_to_numpy(onnx_dtype: int):
-    if onnx_dtype == 10:
-        dtype = np.float16
-    else:
-        raise NotImplementedError("only float16 is handled for now")
+from constants import *
+from utils import map_onnx_dtype_to_numpy
 
 
 # this is special handling logic for "[*]ff.net.0.proj.weight" and "[*]ff.net.0.proj.weight"
@@ -46,7 +41,7 @@ def special_handling(graph: onnx.GraphProto, dim: int) -> dict:
             bytes = permuted_array.tobytes()
             init.raw_data = bytes
 
-        if init.name.endswith("ff.net.0.proj.weight") or init.name.endswith("ff.net.0.proj.weight"):
+        if init.name.endswith("ff.net.0.proj.weight") or init.name.endswith("ff.net.0.proj.bias"):
             # needs special handling
             ait_name = clean_name(init.name)
             assert (ait_name in context.initializers)
@@ -84,11 +79,30 @@ if __name__ == "__main__":
     generated_header_location = "./"
     onnx_model = onnx.load_model(model_path)
     graph = onnx_model.graph
+
+    # AIT stable diffusion implementation assumes input to be in [batch_size, hh, ww, num_channels] whereas PyTorch expects [batch_size, num_channels, hh, ww]
+    # hence, update the inputs of the graph to reflect this permute
+    # (we have to make sure that we pass the permuted input to the compiled custom op)
+    graph.input[0].type.tensor_type.shape.dim[0].dim_value = batch_size
+    graph.input[0].type.tensor_type.shape.dim[1].dim_value = hh
+    graph.input[0].type.tensor_type.shape.dim[2].dim_value = ww
+    graph.input[0].type.tensor_type.shape.dim[3].dim_value = input_channels
+
+
     context = compile(onnx_model, not_compile = True) # not actually compiling here (we use the source generated from AIT directly instead)
 
     # need special handling as specified in https://github.com/facebookincubator/AITemplate/blob/d0ee90156f218f5d39007b1fabdb299cebbeac3b/examples/05_stable_diffusion/compile.py#L51
     ## TODO: what is dims?
     dim = 320 # this is the default value used for unet here: https://github.com/facebookincubator/AITemplate/blob/d0ee90156f218f5d39007b1fabdb299cebbeac3b/examples/05_stable_diffusion/compile.py#L182
     special_inits = special_handling(onnx_model.graph, dim)
-    generate(context, generated_header_location)
+
+    # explicitly specify output shape
+    output_name = context.get_all_outputs()[0]._attrs["name"]
+    output_shape = { output_name : [batch_size, input_channels, hh, ww]}
+
+    # TODO: below is a hack, we have to manually look at the shapes and do the matching --> automate this!
+    # input orders to ort custom op and AIT doesn't match for this model, hence, need inputs_order
+    # look at param[0], param[1], and param[2] in the generated code. This is the order in which we should pass ait inputs
+    inputs_order = [1, 0, 2]
+    generate(context, generated_header_location, output_shape=output_shape, inputs_order=inputs_order)
     convert_graph(graph, context, "/work/models/sd_unet_converted.onnx", special_inits)
