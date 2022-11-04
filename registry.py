@@ -62,5 +62,12 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         output._attrs["name"] = output_name
         context.add_tensor(output)
 
+    # TODO: need to add below for BERT
+    # {'Cast', 'Tanh', 'Attention', 'SkipLayerNormalization', 'EmbedLayerNormalization', 'MatMul', 'Constant', 'FastGelu', 'Gather'}
+    # EmbedLayerNormalization --> ops.bert_embeddings(...)
+    # gather --> ops.dynamic_slice?
+
+    # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)
+
     else:
         raise NotImplementedError(f"Conversion logic for {op_type} not implemented yet")

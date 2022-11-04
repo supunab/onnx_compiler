@@ -57,9 +57,10 @@ if __name__ == "__main__":
     # use same input for all variants
     input_np = np.random.rand(batch_size, input_size).astype(np.float16)
 
+    pt_output = test_pytorch(input_np)
     ort_output = run_onnx_model(original_model_path, input_np)
     ait_custom_op_output = run_onnx_model(model_path, input_np, True, shared_library)
-    pt_output = test_pytorch(input_np)
+
 
     # print(ort_output)
     # print(ait_custom_op_output)

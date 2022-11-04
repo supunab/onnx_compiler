@@ -1,6 +1,6 @@
 from __future__ import annotations
 import numpy as np
-from onnx.mapping import TENSOR_TYPE_TO_NP_TYPE
+from onnx.mapping import TENSOR_TYPE_TO_NP_TYPE, NP_TYPE_TO_TENSOR_TYPE
 
 # names are variable names in generated code, so shouldn't result in invalid var names
 def clean_name(name: str) -> str:
@@ -12,6 +12,10 @@ def clean_name(name: str) -> str:
 
 def map_onnx_dtype_to_numpy(onnx_dtype: int):
     return TENSOR_TYPE_TO_NP_TYPE[onnx_dtype]
+
+def map_np_type_to_onnx(np_type):
+    np_type = np.dtype(np_type)
+    return NP_TYPE_TO_TENSOR_TYPE[np_type] 
 
 def map_type(elem_type: int) -> str:
     np_type = TENSOR_TYPE_TO_NP_TYPE[elem_type]
