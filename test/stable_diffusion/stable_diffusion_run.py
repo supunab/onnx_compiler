@@ -14,7 +14,7 @@ def run_pytorch(latent_model_input: np.ndarray, timesteps: np.ndarray, text_embe
     timesteps = torch.from_numpy(timesteps).cuda()
     text_embeddings = torch.from_numpy(text_embeddings).cuda()
     output = model(latent_model_input, timesteps, encoder_hidden_states=text_embeddings)
-    return output.detach().cpu().numpy()
+    return output.sample.detach().cpu().numpy()
 
 def run_ort_custom_op(latent_model_input: np.ndarray, timesteps: np.ndarray, text_embeddings: np.ndarray, model_path: str, shared_lib: str) -> np.ndarray:
     sess_options = ort.SessionOptions()
@@ -60,13 +60,16 @@ def run_ort_custom_op(latent_model_input: np.ndarray, timesteps: np.ndarray, tex
 @click.option("--benchmark", is_flag=True, help="Benchmark against PyTorch")
 def _run(so_path: str, model_path: str, check_results: bool, benchmark: bool):
     # setup inputs
+    np.random.seed(0)
     latent_model_input = np.random.rand(batch_size, input_channels, hh, ww).astype(np.float16)
-    timesteps = np.random.rand(batch_size)
+    timesteps = np.random.rand(batch_size).astype(np.float16)
     text_embeddings = np.random.rand(batch_size, prompt_length, embedding_size).astype(np.float16)
+
+    print(latent_model_input)
 
     ait_custom_op_output = run_ort_custom_op(latent_model_input, timesteps, text_embeddings, model_path, so_path)
     if check_results:
-        pt_output = run_pytorch(latent_model_input, timesteps, text_embeddings)
+        pt_output = run_pytorch(latent_model_input, timesteps, text_embeddings) # Note - this will OOM in my laptop GPU
         equal = np.allclose(ait_custom_op_output, pt_output, atol=1e-1)
         if equal:
             print("Outputs matched! (to a 0.1 tolerenace)")
@@ -75,6 +78,7 @@ def _run(so_path: str, model_path: str, check_results: bool, benchmark: bool):
 
     if benchmark:
         raise NotImplementedError("TODO: implement benchmarking against PyTorch")
+    print(ait_custom_op_output)
     print(ait_custom_op_output.shape)
 
     # TODO: validate results!

@@ -16,6 +16,18 @@ Outputs:
 **inputs and outputs are provided in float32, but all the ops are float16 ops. Therefore, casts are added for inputs and outputs
     to convert them back to/from float32
 """
+import onnx
+import sys
+import os
+
+sys.path.insert(1, os.path.abspath("./../../"))
+from converter import optimize_graph
 
 if __name__ == "__main__":
-    pass
+    
+    # TODO: temp, just to test optimize_model
+    model_path = "/work/models/bert_base/onnx_models/" + "bert_base_cased_3_fp16_gpu.onnx"
+
+    model = onnx.load_model(model_path)
+    optimize_graph(model)
+    onnx.save_model(model, "test.onnx")

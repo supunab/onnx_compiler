@@ -20,6 +20,7 @@ import logging
 from tqdm import tqdm
 import subprocess
 import click
+import math
 
 
 def create_initializer_special(name: str, param: nn.parameter.Parameter) -> list[onnx.TensorProto]:
@@ -32,7 +33,7 @@ def create_initializer_special(name: str, param: nn.parameter.Parameter) -> list
 
     if name.endswith("ff.net.0.proj.weight") or name.endswith("ff.net.0.proj.bias"):
         # need to split the original data into two chunks
-        chunk_point = shape[0] // 2
+        chunk_point = math.ceil(shape[0] / 2)
         data_proj = data.take(range(chunk_point), axis=0)
         data_gate = data.take(range(chunk_point, shape[0]), axis=0)
         name_proj = name

@@ -13,11 +13,15 @@ def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
         d[attr.name] = attr
     return d
 
-def process_node(node: onnx.NodeProto, context: ConverterContext):
+
+def process_node(node: onnx.NodeProto, context: ConverterContext, model: OnnxModel):
+    if node in model.removed_nodes:
+        return
+
     # case-by-case logic for different node type
     op_type = node.op_type
     attributes = to_attribute_dict(list(node.attribute))
-
+    
     if op_type == "Gemm":
         transA = True if ("transA" in attributes and attributes["transA"].i == 1) else False
         transB = True if ("transB" in attributes and attributes["transB"].i == 1) else False
@@ -51,6 +55,8 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         input = context.get_tensor(node.input[0])
         output_name = clean_name(node.output[0])
         output = ops.relu(input)
+        ops.gemm_rcr_bias_fast_gelu
+
         output._attrs["name"] = output_name
         context.add_tensor(output)
 
@@ -61,6 +67,36 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         output = ops.softmax()(input, axis)
         output._attrs["name"] = output_name
         context.add_tensor(output)
+
+    elif op_type == "Matmul":
+        # TODO: make it more generalize
+        a = context.get_tensor(node.input[0])
+        b = context.get_tensor(node.input[1])
+        op = "gemm_rrr"
+
+
+        if a._rank >= 2 and b._rank == 2:
+            # this is a gemm
+            a_in = a if a._rank == 2 else ops.reshape()(a, [-1, a.shape[-1]])
+            # TODO: verify all are row-major
+            output = ops.gemm_rrr()(a_in, b)
+
+            ops.gemm_rcr_bias_fast_gelu
+
+            output_name = clean_name(node.output[0])
+            output._attrs["name"] = output_name
+            context.add_tensor(output)
+
+        elif a._rank > 2 and b._rank > 2:
+            # this is a bmm
+            raise NotImplementedError(f"Matmul with A-rank:{a._rank} and B-rank:{b._rank} is not implemented yet")
+        else:
+            # other cases are not implemented yet either
+            raise NotImplementedError(f"Matmul with A-rank:{a._rank} and B-rank:{b._rank} is not implemented yet")
+
+    elif op_type == "FastGelu":
+        ops.relu
+        pass
 
     # TODO: need to add below for BERT
     # {'Cast', 'Tanh', 'Attention', 'SkipLayerNormalization', 'EmbedLayerNormalization', 'MatMul', 'Constant', 'FastGelu', 'Gather'}
