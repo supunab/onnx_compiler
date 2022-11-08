@@ -21,7 +21,7 @@ import sys
 import os
 
 sys.path.insert(1, os.path.abspath("./../../"))
-from converter import optimize_graph
+from converter import transform_graph
 import logging
 
 # TODO: attention_mask is ignored at the moment since there's no matching param in AIT Bert
@@ -31,6 +31,10 @@ if __name__ == "__main__":
     # TODO: temp, just to test optimize_model
     model_path = "/work/models/bert_base/onnx_models/" + "bert_base_cased_3_fp16_gpu.onnx"
 
+    batch_size = 2
+    hidden_size = 768
+    seq_len = 512
+
     model = onnx.load_model(model_path)
-    optimize_graph(model)
+    transform_graph(model, attributes={"batch_size": batch_size, "hidden_size": hidden_size, "seq_len": seq_len})
     onnx.save_model(model, "test.onnx")

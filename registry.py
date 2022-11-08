@@ -5,14 +5,7 @@ import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
 from aitemplate.frontend import nn
-from utils import clean_name
-
-def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
-    d = {}
-    for attr in attributes:
-        d[attr.name] = attr
-    return d
-
+from utils import clean_name, to_attribute_dict
 
 def process_node(node: onnx.NodeProto, context: ConverterContext):
     # case-by-case logic for different node type
@@ -72,9 +65,11 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
         if a._rank >= 2 and b._rank == 2:
             # this is a gemm
-            a_in = a if a._rank == 2 else ops.reshape()(a, [-1, a.shape[-1]])
+            a_in = a if a._rank == 2 else ops.reshape()(a, [-1, a.shape()[-1]])
             # all MatMul inputs are row-major because there's no transA, transB attributes
             output = ops.gemm_rrr()(a_in, b)
+            # reshape the output
+            output = output if a._rank == 2 else ops.reshape()(a, a.shape()[:-1] + [b.shape()[-1]])
             output_name = clean_name(node.output[0])
             output._attrs["name"] = output_name
             context.add_tensor(output)
@@ -128,36 +123,75 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         output._attrs["name"] = output_name
         context.add_tensor(output)
 
-    elif op_type == "SkipLayerNormalization": # TODO: probably better to unpack this and fuse matmul + add + residual --> LayerNorm
-        # SkipLayerNorm is add, residual add, layer norm
-        epsilon = attributes["epsilon"]
-        residual = context.get_tensor(node.input[0])
-        hidden_states = context.get_tensor(node.input[1])
-        layer_norm_weight = context.get_tensor(node.input[2])
-        layer_norm_bias = context.get_tensor(node.input[3])
-        hidden_states_bias = context.get_tensor(node.input[4])
+    elif op_type == "gemm_rcr_bias_add":
+        matmul_A = context.get_tensor(node.input[0])
+        matmul_B = context.get_tensor(node.input[1])
+        bias_weight = context.get_tensor(node.input[2])
+        residual_weight = context.get_tensor(node.input[3])
+
+        assert matmul_B._rank == 2
+        assert matmul_A._rank >= 2
+
+        matmul_A_in = matmul_A if matmul_A._rank == 2 else ops.reshape()(matmul_A, [-1, matmul_A.shape()[-1]])
+
+        output = ops.gemm_rcr_bias_add()(matmul_A_in, matmul_B, bias_weight, residual_weight)
+        output = output if matmul_A._rank == 2 else ops.reshape()(output, matmul_A.shape()[:-1] + [matmul_B.shape()[1]])
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
+
+    elif op_type == "LayerNormalization":
+        hidden_states = context.get_tensor(node.input[0])
+        ln_weight = context.get_tensor(node.input[1])
+        ln_bias = context.get_tensor(node.input[2])
 
         hidden_size = context.attributes["hidden_size"]
-        ln = nn.LayerNorm(normalized_shape=hidden_size, eps=epsilon)
-        # update the params to use tensors we created
-        ln.weight._tensor = layer_norm_weight
-        ln.bias._tensor = layer_norm_bias
-
-        # first perform the bias add
-        # Note - decided to unpack the SkipLayerNorm node
+        epsilon = attributes["epsilon"]
+        output = ops.layernorm(hidden_size)(hidden_states, ln_weight, ln_bias, hidden_size, epsilon)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
 
 
     elif op_type == "EmbedLayerNormalization":
-        pass
+        input_ids = context.get_tensor(node.input[0])
+        token_type_ids = context.get_tensor(node.input[1])
+        word_embedding_weight = context.get_tensor(node.input[2])
+        pos_embedding_weight = context.get_tensor(node.input[3])
+        token_type_embedding_weight = context.get_tensor(node.input[4])
+        ln_weight = context.get_tensor(node.input[5])
+        ln_bias = context.get_tensor(node.input[6])
+        attention_mask = context.get_tensor(node.input[7]) # TODO: attention mask is not used in AIT bert_embedding?
+        pos_ids = context.get_tensor(node.input[8])
+
+        epsilon = attributes["epsilon"]
+
+        # computes: embedding = layernorm(word_embedding + token_type_embedding + position_embedding)
+        output = ops.bert_embeddings()(
+            input_ids=input_ids,
+            token_type_ids=token_type_ids,
+            position_ids=pos_ids,
+            word_embeddings=word_embedding_weight,
+            token_type_embeddings=token_type_embedding_weight,
+            position_embeddings=pos_embedding_weight,
+            gamma=ln_weight,
+            beta=ln_bias,
+            eps=epsilon
+        )
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
 
     elif op_type == "Gather":
-        pass
+        axis = attributes["axis"]
+        data = context.get_tensor(node.input[0])
+        indices = context.get_tensor(node.input[1])
 
-    # TODO: need to add below for BERT
-    # {'Cast', 'Tanh', 'Attention', 'SkipLayerNormalization', 'EmbedLayerNormalization', 'MatMul', 'Constant', 'FastGelu', 'Gather'}
-    # EmbedLayerNormalization --> ops.bert_embeddings(...)
-    # gather --> ops.dynamic_slice?
-
+        output = ops.gather()(data, axis, indices)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
+        
     # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)
 
     else:

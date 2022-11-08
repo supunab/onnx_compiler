@@ -9,7 +9,7 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext
 from registry import process_node
-from utils import clean_name, map_type, to_attribute_dict
+from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx
 import numpy as np
 from onnx import helper
 import logging
@@ -138,11 +138,13 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
     constant.raw_data = data.tobytes()
 
 """
-(in-place) graph level optimizations. Mostly for changing nodes (e.g., Matmul --> GEMM) and fusing (GEMM + fast_gelu) so that
+(in-place) graph level transformations. Mostly for changing nodes (e.g., Matmul --> GEMM) and fusing (GEMM + fast_gelu) so that
            corresponding optimized backend op can be directly used
             (TODO: kind of hard coded for BERT ops right now)
+
+            attributes: a dict of attributes like seq_len, batch_size, etc.
 """
-def optimize_graph(model: onnx.ModelProto) -> None:
+def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
     changed = True
     iter = 0
     while changed:
@@ -192,7 +194,7 @@ def optimize_graph(model: onnx.ModelProto) -> None:
                         continue
                 
                 # if B is a constant (so that we can make it col-major) and next op is add, we can
-                # try gemm_rcr_add_add fusion
+                # try gemm_rcr_bias_add fusion
                 if next_node != None and m.is_init(node.input[1]) and next_node.op_type == "Add":
                     # see if the consumer is also an add
                     add1_output = next_node.output[0]
@@ -200,7 +202,7 @@ def optimize_graph(model: onnx.ModelProto) -> None:
 
                     if len(add1_consumers) == 1 and add1_consumers[0].op_type == "Add":
                         next_next_node = add1_consumers[0]
-                        # can do gemm_rcr_add_add fusion
+                        # can do gemm_rcr_bias_add fusion
                         # convert Matmul's B to col-major (to use gemm_rcr)
                         matmul_a_name = node.input[0]
                         matmul_b_name = node.input[1]
@@ -213,13 +215,13 @@ def optimize_graph(model: onnx.ModelProto) -> None:
 
                         final_output_name = next_next_node.output[0]
                         # create new node
-                        gemm_rcr_add_add_node = helper.make_node(
-                            op_type="gemm_rcr_add_add_node",
+                        gemm_rcr_bias_add_node = helper.make_node(
+                            op_type="gemm_rcr_bias_add",
                             inputs=[matmul_a_name, matmul_b_name, add1_other_input, add2_other_input],
                             outputs=[final_output_name],
                             name=node.name + "_add_add_fused"
                         )
-                        graph.node.append(gemm_rcr_add_add_node)
+                        graph.node.append(gemm_rcr_bias_add_node)
                         to_remove.extend([node, next_node, next_next_node])
                         changed = True
 
@@ -269,9 +271,34 @@ def optimize_graph(model: onnx.ModelProto) -> None:
                 to_remove.append(node)
                 changed = True
 
-            ## TODO: add case for matmul with b as init to gemm_rcr_
+            # TODO: len checking might not be the most accurate thing to do here
+            elif node.op_type == "EmbedLayerNormalization" and len(node.input) == 8:
+                # this is not really an optimization, but if this doesn't have position_ids, add a default value
+                seq_len = attributes["seq_len"]
+                batch_size = attributes["batch_size"]
+                dtype = np.int64
+                data = np.arange(0, seq_len, dtype=dtype).reshape(1, seq_len).repeat(batch_size, axis=0)
+                init_node_name = "__default_pos_ids"
+                # check if this already exists (e.g., used for a different node)
+                found = False
+                for init in graph.initializer:
+                    if init.name == init_node_name:
+                        found = True
+                        break
+                if not found:
+                    init_node = helper.make_tensor(
+                        name = init_node_name,
+                        data_type=map_np_type_to_onnx(dtype),
+                        dims=[batch_size, seq_len],
+                        vals=data.tobytes(), raw=True)
+                    # add this to inits
+                    graph.initializer.append(init_node)
+                
+                # augment the EmbedLayerNormalization node to have this as input
+                node.input.append(init_node_name)
 
-                # TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
+            ## TODO: add case for matmul with b as init to gemm_rcr_
+            ## TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
         
         for node in to_remove:
             graph.node.remove(node)
@@ -296,8 +323,8 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
     attributes: attributes of the model that might not be available on the onnx graph (e.g., batch size, hidden size, etc.)
     """
     graph = model.graph
+    transform_graph(model, attributes)
     context = ConverterContext(graph, attributes)
-    optimize_graph(model)
 
     # some notes
     nodes = graph.node

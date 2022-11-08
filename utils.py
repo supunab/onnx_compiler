@@ -1,5 +1,6 @@
 from __future__ import annotations
 import numpy as np
+import onnx
 from onnx.mapping import TENSOR_TYPE_TO_NP_TYPE, NP_TYPE_TO_TENSOR_TYPE
 
 # names are variable names in generated code, so shouldn't result in invalid var names
