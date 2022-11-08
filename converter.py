@@ -12,6 +12,8 @@ from registry import process_node
 from utils import clean_name, map_type, to_attribute_dict
 import numpy as np
 from onnx import helper
+import logging
+from onnxruntime.transformers.onnx_model import OnnxModel
 
 
 def extract_shape(onnx_value: onnx.ValueInfoProto) -> list[int]:
@@ -43,11 +45,11 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
 
 
 ## a wrapper for onnx graphs that contain an indexed graphical representation
-class OnnxModel:
+class ModelWraper:
     def __init__(self, model):
         self.model = model
         self.graph = model.graph
-        consumers, outputs, producers = _find_consumers(model.graph)
+        consumers, outputs, producers = ModelWraper._find_consumers(model.graph)
         self.consumers = consumers
         self.outputs = outputs # not to be confused with the actual outputs of the full model (instead, it is output of each node)
         self.producers = producers
@@ -61,54 +63,60 @@ class OnnxModel:
         return name in self.name2init
 
 
-def _find_consumers(graph: onnx.GraphProto) -> dict:
-    i = 0 # to uniquely name nodes without names
-    consumers = {} # consumers for a given node's given input
-    outputs = {} # outputs produced by a given node
-    producers = {} # producer of a particular tensor (name)
-    # populate producers with inputs and inits
-    for init in graph.initializer:
-        if init.name == "":
-            init.name = f"node_{i}"
-            i += 1
-        producers[init.name] = init
-        consumers[init.name] = {init.name : []}
-    for input in graph.input:
-        if input.name == "":
-            input.name = f"node_{i}"
-            i += 1
-        producers[input.name] = input
-        consumers[input.name] = {input.name : []}
+    def _find_consumers(graph: onnx.GraphProto) -> dict:
+        # note - cannot assume topological ordering
+        i = 0 # to uniquely name nodes without names
+        consumers = {} # consumers for a given node's given output
+        outputs = {} # outputs produced by a given node
+        producers = {} # producer of a particular tensor (name)
+        # populate producers with inputs and inits
+        for init in graph.initializer:
+            if init.name == "":
+                init.name = f"node_{i}"
+                i += 1
+            producers[init.name] = init
+            consumers[init.name] = {init.name : []}
+        for input in graph.input:
+            if input.name == "":
+                input.name = f"node_{i}"
+                i += 1
+            producers[input.name] = input
+            consumers[input.name] = {input.name : []}
 
-    for node in graph.node:
-        if node.name == "":
-            node.name = f"node_{i}"
-            i +=1 
-        consumers[node.name] = {}
-        output_names = list(node.output)
-        outputs[node.name] = output_names
-        for output in output_names:
-            producers[output] = node
-            consumers[node.name][output] = []
-        
-        input_names = list(node.input)
-        for input in input_names:
-            producer = producers[input]
-            consumers[producer.name][input].append(node)
-    return consumers, outputs, producers
+        for node in graph.node:
+            if node.name == "":
+                node.name = f"node_{i}"
+                i +=1 
+            consumers[node.name] = {}
+            output_names = list(node.output)
+            outputs[node.name] = output_names
+            # if node.name == "BiasGelu_Approximation_0":
+            #     print(output_names)
+            for output in output_names:
+                producers[output] = node
+                consumers[node.name][output] = []
+            
+            input_names = list(node.input)
+            for input in input_names:
+                producer = producers[input]
+                consumers[producer.name][input].append(node)
+        return consumers, outputs, producers
             
 
-def next_trivially_fusable_node(curr_node: onnx.NodeProto, model: OnnxModel):
+def next_trivially_fusable_node(curr_node: onnx.NodeProto, model: ModelWraper):
     # this is only for cases where there's a single output, that's connected to single consumer
     # check if only one output
-    if len(model.outputs[curr_node.name]) == 1:
-        output = model.outputs[curr_node.name][0]
+    if len(curr_node.output) == 1:
+        output = curr_node.output[0]
+        # print(f"curr_node: {curr_node.name}")
         # check if only one consumer
         if len(model.consumers[curr_node.name][output]) == 1:
             consumer = model.consumers[curr_node.name][output][0]
+            # print(f"consumer: {consumer.name}")
             # check if only one actual input (i.e., without constants)
             found_one_var_input = False
             for input in consumer.input:
+                # print(f"input: {input}; is_init: {model.is_init(input)}")
                 if not model.is_init(input):
                     if found_one_var_input:
                         return None
@@ -118,107 +126,162 @@ def next_trivially_fusable_node(curr_node: onnx.NodeProto, model: OnnxModel):
     return None
 
 
+def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
+    shape = list(constant.dims)
+    d1 = constant.dims.pop()
+    d2 = constant.dims.pop()
+    constant.dims.append(d1)
+    constant.dims.append(d2)
+    # change raw data
+    data = np.frombuffer(constant.raw_data, dtype=np.float16).reshape(shape) # TODO: dtype hardcoded
+    data = data.transpose()
+    constant.raw_data = data.tobytes()
+
 """
 (in-place) graph level optimizations. Mostly for changing nodes (e.g., Matmul --> GEMM) and fusing (GEMM + fast_gelu) so that
            corresponding optimized backend op can be directly used
             (TODO: kind of hard coded for BERT ops right now)
 """
 def optimize_graph(model: onnx.ModelProto) -> None:
-    m = OnnxModel(model)
-    to_remove = []
-    graph = model.graph
-    for node in graph.node:
-        if node in to_remove:
-            continue
+    changed = True
+    iter = 0
+    while changed:
+        iter += 1
+        logging.info(f"Running graph optimize iteration {iter}")
+        m = ModelWraper(model)
+        graph = model.graph
+        changed = False
+        to_remove = []
+        for node in graph.node:
+            if node in to_remove:
+                continue
 
-        # TODO: remove casts at the boundary 
-        if node.op_type == "MatMul":
-            next_node = next_trivially_fusable_node(node, m)
-            # ORT `FastGelu` node has contains the bias for the prev linear as well
-            if next_node != None and next_node.op_type == "FastGelu": 
-                # can be fused to AIT's gemm_rcr_gelu
-                input_a_name = node.input[0]
-                input_b_name = node.input[1]
+            # TODO: remove casts at the boundary 
 
-                # check if weights is a constant
-                if m.is_init(input_b_name):
-                    b_init = m.name2init[input_b_name]
+            # MatMul -> bias -> fast gelu fusion
+            # Matmul -> add -> add fusion
+            if node.op_type == "MatMul":
+                next_node = next_trivially_fusable_node(node, m)
+                # ORT `FastGelu` node has contains the bias for the prev linear as well
+                if next_node != None and next_node.op_type == "FastGelu": 
+                    # can be fused to AIT's gemm_rcr_gelu
+                    input_a_name = node.input[0]
+                    input_b_name = node.input[1]
 
-                    # a_shape = extract_shape(a_input) TODO: need to figure out a way to find the shape?
-                    b_shape = list(b_init.dims)
+                    # check if weights is a constant
+                    if m.is_init(input_b_name):
+                        b_init = m.name2init[input_b_name]
 
-                    # check if row-major (I think it must be for Matmul)
-                    # assert a_shape[-1]==b_shape[-2]
+                        # a_shape = extract_shape(a_input) TODO: need to figure out a way to find the shape?
+                        b_shape = list(b_init.dims)
 
-                    # transpose to column-major so that we can use gemm_rcr_fast_gelu
-                    d1 = b_init.dims.pop()
-                    d2 = b_init.dims.pop()
-                    b_init.dims.append(d1)
-                    b_init.dims.append(d2)
-                    # change raw data
-                    data = np.frombuffer(b_init.raw_data, dtype=np.float16).reshape(b_shape) # TODO: dtype hardcoded
-                    data = data.transpose()
-                    b_init.raw_data = data.tobytes()
+                        # check if row-major (I think it must be for Matmul)
+                        # assert a_shape[-1]==b_shape[-2]
 
-                    # remove old nodes and create new "gemm_rcr_fast_gelu"
-                    to_remove.append(node)
-                    to_remove.append(next_node)
+                        # transpose to column-major so that we can use gemm_rcr_fast_gelu
+                        convert_row_major_constant_to_col_major(b_init)
 
-                    # create node
-                    new_node = helper.make_node("gemm_rcr_fast_gelu", inputs=[input_a_name, input_b_name, next_node.input[1]], outputs=[next_node.output[0]])
-                    graph.node.append(new_node)
-            
-        elif node.op_type == "SkipLayerNormalization":
-            # unpack SkipLayerNorm for better fusion (in AIT)
-            res_input_name = node.input[0]
-            matmul_output_name = node.input[1]
-            ln_weight_name = node.input[2]
-            ln_bias_name = node.input[3]
-            prev_bias_weight_name = node.input[4]
+                        # remove old nodes and create new "gemm_rcr_fast_gelu"
+                        to_remove.append(node)
+                        to_remove.append(next_node)
 
-            output_name = node.output[0]
+                        # create node
+                        new_node = helper.make_node("gemm_rcr_fast_gelu", inputs=[input_a_name, input_b_name, next_node.input[1]], outputs=[next_node.output[0]])
+                        graph.node.append(new_node)
+                        changed = True
+                        continue
+                
+                # if B is a constant (so that we can make it col-major) and next op is add, we can
+                # try gemm_rcr_add_add fusion
+                if next_node != None and m.is_init(node.input[1]) and next_node.op_type == "Add":
+                    # see if the consumer is also an add
+                    add1_output = next_node.output[0]
+                    add1_consumers = m.consumers[next_node.name][add1_output]
 
-            bias_add_node_output_name = matmul_output_name + "_bias_added"
-            # create add node (for bias)
-            bias_add_node = helper.make_node(
-                op_type="Add",
-                inputs=[matmul_output_name, prev_bias_weight_name],
-                outputs=[bias_add_node_output_name],
-                name=matmul_output_name + "_add_bias"
-            )
+                    if len(add1_consumers) == 1 and add1_consumers[0].op_type == "Add":
+                        next_next_node = add1_consumers[0]
+                        # can do gemm_rcr_add_add fusion
+                        # convert Matmul's B to col-major (to use gemm_rcr)
+                        matmul_a_name = node.input[0]
+                        matmul_b_name = node.input[1]
 
-            # create add node (bias_output + residual_input)
-            residual_add_output_name = matmul_output_name + "_bias_residual_added"
-            residual_add_node = helper.make_node(
-                op_type="Add",
-                inputs=[bias_add_node_output_name, res_input_name],
-                outputs=[residual_add_output_name],
-                name=matmul_output_name + "_added_bias_add_residual"
-            )
+                        matmul_b = m.name2init[matmul_b_name]
+                        convert_row_major_constant_to_col_major(matmul_b)
 
-            # create layernorm node
-            ln_node = helper.make_node(
-                op_type="LayerNormalization",
-                inputs=[residual_add_output_name, ln_weight_name, ln_bias_name],
-                outputs=[output_name],
-                name=output_name + "_ln_node"
-            )
-            # find attributes and add them to ln_node
-            for attr in node.attribute:
-                if attr in ["axis", "epsilon", "stash_type"]:
-                    ln_node.attribute.append(attr)
+                        add1_other_input = next_node.input[0] if next_node.input[0] != node.output[0] else node.input[1]
+                        add2_other_input = next_next_node.input[0] if next_next_node.input[0] != next_node.output[0] else next_next_node.input[1]
 
-            # add newly created nodes
-            graph.node.extend([bias_add_node, residual_add_node, ln_node])
-            to_remove.append(node)
+                        final_output_name = next_next_node.output[0]
+                        # create new node
+                        gemm_rcr_add_add_node = helper.make_node(
+                            op_type="gemm_rcr_add_add_node",
+                            inputs=[matmul_a_name, matmul_b_name, add1_other_input, add2_other_input],
+                            outputs=[final_output_name],
+                            name=node.name + "_add_add_fused"
+                        )
+                        graph.node.append(gemm_rcr_add_add_node)
+                        to_remove.extend([node, next_node, next_next_node])
+                        changed = True
 
-        ## TODO: add case for matmul with b as init to gemm_rcr_
 
-            # TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
-    
-    for node in to_remove:
-        graph.node.remove(node)
-        print(f"removing {node.name}")
+            elif node.op_type == "SkipLayerNormalization":
+                # unpack SkipLayerNorm for better fusion (in AIT)
+                res_input_name = node.input[0]
+                matmul_output_name = node.input[1]
+                ln_weight_name = node.input[2]
+                ln_bias_name = node.input[3]
+                prev_bias_weight_name = node.input[4]
+
+                output_name = node.output[0]
+
+                bias_add_node_output_name = matmul_output_name + "_bias_added"
+                # create add node (for bias)
+                bias_add_node = helper.make_node(
+                    op_type="Add",
+                    inputs=[matmul_output_name, prev_bias_weight_name],
+                    outputs=[bias_add_node_output_name],
+                    name=matmul_output_name + "_add_bias"
+                )
+
+                # create add node (bias_output + residual_input)
+                residual_add_output_name = matmul_output_name + "_bias_residual_added"
+                residual_add_node = helper.make_node(
+                    op_type="Add",
+                    inputs=[bias_add_node_output_name, res_input_name],
+                    outputs=[residual_add_output_name],
+                    name=matmul_output_name + "_added_bias_add_residual"
+                )
+
+                # create layernorm node
+                ln_node = helper.make_node(
+                    op_type="LayerNormalization",
+                    inputs=[residual_add_output_name, ln_weight_name, ln_bias_name],
+                    outputs=[output_name],
+                    name=output_name + "_ln_node"
+                )
+                # find attributes and add them to ln_node
+                for attr in node.attribute:
+                    if attr in ["axis", "epsilon", "stash_type"]:
+                        ln_node.attribute.append(attr)
+
+                # add newly created nodes
+                graph.node.extend([bias_add_node, residual_add_node, ln_node])
+                to_remove.append(node)
+                changed = True
+
+            ## TODO: add case for matmul with b as init to gemm_rcr_
+
+                # TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
+        
+        for node in to_remove:
+            graph.node.remove(node)
+            logging.debug(f"removing {node.name}")
+
+        # need to topologicaly sort since newly added nodes are just prepended
+        if changed:
+            OnnxModel.graph_topological_sort(graph)
+
+    logging.info("Compelted graph optimize pass")
 
 def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False, attributes = {}) -> ConverterContext:
     """

@@ -22,9 +22,11 @@ import os
 
 sys.path.insert(1, os.path.abspath("./../../"))
 from converter import optimize_graph
+import logging
 
 # TODO: attention_mask is ignored at the moment since there's no matching param in AIT Bert
 if __name__ == "__main__":
+    # logging.Logger.setLevel(logging.getLogger(), logging.DEBUG)
     
     # TODO: temp, just to test optimize_model
     model_path = "/work/models/bert_base/onnx_models/" + "bert_base_cased_3_fp16_gpu.onnx"
