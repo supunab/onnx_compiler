@@ -14,10 +14,7 @@ def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
     return d
 
 
-def process_node(node: onnx.NodeProto, context: ConverterContext, model: OnnxModel):
-    if node in model.removed_nodes:
-        return
-
+def process_node(node: onnx.NodeProto, context: ConverterContext):
     # case-by-case logic for different node type
     op_type = node.op_type
     attributes = to_attribute_dict(list(node.attribute))
@@ -72,17 +69,12 @@ def process_node(node: onnx.NodeProto, context: ConverterContext, model: OnnxMod
         # TODO: make it more generalize
         a = context.get_tensor(node.input[0])
         b = context.get_tensor(node.input[1])
-        op = "gemm_rrr"
-
 
         if a._rank >= 2 and b._rank == 2:
             # this is a gemm
             a_in = a if a._rank == 2 else ops.reshape()(a, [-1, a.shape[-1]])
-            # TODO: verify all are row-major
+            # all MatMul inputs are row-major because there's no transA, transB attributes
             output = ops.gemm_rrr()(a_in, b)
-
-            ops.gemm_rcr_bias_fast_gelu
-
             output_name = clean_name(node.output[0])
             output._attrs["name"] = output_name
             context.add_tensor(output)
@@ -94,8 +86,71 @@ def process_node(node: onnx.NodeProto, context: ConverterContext, model: OnnxMod
             # other cases are not implemented yet either
             raise NotImplementedError(f"Matmul with A-rank:{a._rank} and B-rank:{b._rank} is not implemented yet")
 
-    elif op_type == "FastGelu":
-        ops.relu
+    elif op_type == "gemm_rcr_fast_gelu":
+        # fused gemm + bias + fast_gelu node
+        a = context.get_tensor(node.input[0])
+        b = context.get_tensor(node.input[1])
+        bias = context.get_tensor(node.input[2])
+
+        output = ops.gemm_rcr_bias_fast_gelu(a, b, bias)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
+
+    elif op_type == "Tanh":
+        input = context.get_tensor(node.input[0])
+        output = ops.tanh(input)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
+
+    elif op_type == "Attention":
+        seq_len = attributes["num_heads"]
+        batch_size = context.attributes["batch_size"]
+        hidden_dim = context.attributes["hidden_size"]
+
+        # TODO: here, we are giving up on some AIT fusion (e.g., has_residual = True would fuse the add with subsequent project)
+        # note - we don't use the full MHA here. Full MHA has qkv_linear + attention + linear_bias + residual add
+        #        however, we are only using this for qkv_linear + attention
+        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, qkv_bias=True, has_residual=False)
+        hidden_states = context.get_tensor(node.input[0])
+        qkv_weight = context.get_tensor(node.input[1])
+        qkv_bias = context.get_tensor(node.input[2])
+        mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
+
+        # update the params to use tensor we created        
+        mha.qkv.weight._tensor = qkv_weight
+        mha.qkv.bias._tensor = qkv_bias
+
+        intermediate = mha.qkv_proj(hidden_states)
+        output = mha.attention(intermediate)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
+
+    elif op_type == "SkipLayerNormalization": # TODO: probably better to unpack this and fuse matmul + add + residual --> LayerNorm
+        # SkipLayerNorm is add, residual add, layer norm
+        epsilon = attributes["epsilon"]
+        residual = context.get_tensor(node.input[0])
+        hidden_states = context.get_tensor(node.input[1])
+        layer_norm_weight = context.get_tensor(node.input[2])
+        layer_norm_bias = context.get_tensor(node.input[3])
+        hidden_states_bias = context.get_tensor(node.input[4])
+
+        hidden_size = context.attributes["hidden_size"]
+        ln = nn.LayerNorm(normalized_shape=hidden_size, eps=epsilon)
+        # update the params to use tensors we created
+        ln.weight._tensor = layer_norm_weight
+        ln.bias._tensor = layer_norm_bias
+
+        # first perform the bias add
+        # Note - decided to unpack the SkipLayerNorm node
+
+
+    elif op_type == "EmbedLayerNormalization":
+        pass
+
+    elif op_type == "Gather":
         pass
 
     # TODO: need to add below for BERT

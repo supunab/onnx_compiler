@@ -23,6 +23,7 @@ import os
 sys.path.insert(1, os.path.abspath("./../../"))
 from converter import optimize_graph
 
+# TODO: attention_mask is ignored at the moment since there's no matching param in AIT Bert
 if __name__ == "__main__":
     
     # TODO: temp, just to test optimize_model

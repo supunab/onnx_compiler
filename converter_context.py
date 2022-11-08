@@ -5,11 +5,12 @@ from utils import clean_name
 
 ## keeps track of the processed tensors
 class ConverterContext:
-    def __init__(self, graph: onnx.GraphProto) -> None:
+    def __init__(self, graph: onnx.GraphProto, attributes: dict = {}) -> None:
         self.tensors = {}
         self.outputs = list(map(lambda t: clean_name(t.name), graph.output))
         self.inputs = list(map(lambda t: clean_name(t.name), graph.input))
         self.initializers = list(map(lambda t: clean_name(t.name), graph.initializer))
+        self.attributes = attributes
 
     def add_tensor(self, tensor: Tensor) -> None:
         name = tensor._attrs["name"]
@@ -25,7 +26,7 @@ class ConverterContext:
         return self.tensors[clean_name(name)]
 
     def get_final_output(self) -> Tensor:
-        # TODO: what is there are more outputs?
+        # TODO: what if there are more outputs?
         assert len(self.outputs) == 1, "Only support cases where there's only one output"
         return self.tensors[self.outputs[0]]
 

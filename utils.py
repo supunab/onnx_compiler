@@ -74,3 +74,10 @@ def map_type_to_ait_str(type) -> str:
         return "kLong"
     else:
         raise NotImplementedError(f"type mapping for {type} is not implemented yet")
+
+
+def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
+    d = {}
+    for attr in attributes:
+        d[attr.name] = attr
+    return d

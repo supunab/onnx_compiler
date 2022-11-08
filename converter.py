@@ -9,7 +9,7 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext
 from registry import process_node
-from utils import clean_name, map_type
+from utils import clean_name, map_type, to_attribute_dict
 import numpy as np
 from onnx import helper
 
@@ -131,9 +131,11 @@ def optimize_graph(model: onnx.ModelProto) -> None:
         if node in to_remove:
             continue
 
+        # TODO: remove casts at the boundary 
         if node.op_type == "MatMul":
             next_node = next_trivially_fusable_node(node, m)
-            if next_node != None and next_node.op_type == "FastGelu":
+            # ORT `FastGelu` node has contains the bias for the prev linear as well
+            if next_node != None and next_node.op_type == "FastGelu": 
                 # can be fused to AIT's gemm_rcr_gelu
                 input_a_name = node.input[0]
                 input_b_name = node.input[1]
@@ -165,15 +167,73 @@ def optimize_graph(model: onnx.ModelProto) -> None:
                     # create node
                     new_node = helper.make_node("gemm_rcr_fast_gelu", inputs=[input_a_name, input_b_name, next_node.input[1]], outputs=[next_node.output[0]])
                     graph.node.append(new_node)
+            
+        elif node.op_type == "SkipLayerNormalization":
+            # unpack SkipLayerNorm for better fusion (in AIT)
+            res_input_name = node.input[0]
+            matmul_output_name = node.input[1]
+            ln_weight_name = node.input[2]
+            ln_bias_name = node.input[3]
+            prev_bias_weight_name = node.input[4]
+
+            output_name = node.output[0]
+
+            bias_add_node_output_name = matmul_output_name + "_bias_added"
+            # create add node (for bias)
+            bias_add_node = helper.make_node(
+                op_type="Add",
+                inputs=[matmul_output_name, prev_bias_weight_name],
+                outputs=[bias_add_node_output_name],
+                name=matmul_output_name + "_add_bias"
+            )
+
+            # create add node (bias_output + residual_input)
+            residual_add_output_name = matmul_output_name + "_bias_residual_added"
+            residual_add_node = helper.make_node(
+                op_type="Add",
+                inputs=[bias_add_node_output_name, res_input_name],
+                outputs=[residual_add_output_name],
+                name=matmul_output_name + "_added_bias_add_residual"
+            )
+
+            # create layernorm node
+            ln_node = helper.make_node(
+                op_type="LayerNormalization",
+                inputs=[residual_add_output_name, ln_weight_name, ln_bias_name],
+                outputs=[output_name],
+                name=output_name + "_ln_node"
+            )
+            # find attributes and add them to ln_node
+            for attr in node.attribute:
+                if attr in ["axis", "epsilon", "stash_type"]:
+                    ln_node.attribute.append(attr)
+
+            # add newly created nodes
+            graph.node.extend([bias_add_node, residual_add_node, ln_node])
+            to_remove.append(node)
+
+        ## TODO: add case for matmul with b as init to gemm_rcr_
+
             # TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
     
     for node in to_remove:
         graph.node.remove(node)
         print(f"removing {node.name}")
 
-def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False):
+def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False, attributes = {}) -> ConverterContext:
+    """
+    Compile the model to AIT model ops. The returned converter context contains all the input, intermediate, and output AIT Tensors. This 
+    converter context then can be used in the rest of the code generation process (i.e., generating the custom op).
+    Args
+    model: the onnx model
+    output_dir: where the AIT generated source code should be stored
+    model_name: name of the model (used as the folder name for the generated sources directory)
+    not_compile: only populate the ConverterContext (with inputs, inits, and ouputs; without intermediates). 
+                Used when AIT generated sources are not needed (e.g., they are generated separately)
+    attributes: attributes of the model that might not be available on the onnx graph (e.g., batch size, hidden size, etc.)
+    """
     graph = model.graph
-    context = ConverterContext(graph)
+    context = ConverterContext(graph, attributes)
     optimize_graph(model)
 
     # some notes
