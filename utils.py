@@ -30,6 +30,8 @@ def map_type(elem_type: int) -> str:
         return "uint8"
     elif np_type == np.dtype("int64"):
         return "int64"
+    elif np_type == np.dtype("int32"):
+        return "int32"
     else:
         raise NotImplementedError(f"type mapping for {elem_type} (np type = {np_type}) is not implemented yet")
 

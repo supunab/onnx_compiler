@@ -9,9 +9,9 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext
 from registry import process_node
-from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx
+from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx, map_onnx_dtype_to_numpy
 import numpy as np
-from onnx import helper
+from onnx import helper, numpy_helper
 import logging
 from onnxruntime.transformers.onnx_model import OnnxModel
 
@@ -133,7 +133,8 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
     constant.dims.append(d1)
     constant.dims.append(d2)
     # change raw data
-    data = np.frombuffer(constant.raw_data, dtype=np.float16).reshape(shape) # TODO: dtype hardcoded
+    dtype = map_onnx_dtype_to_numpy(constant.data_type)
+    data = np.frombuffer(constant.raw_data, dtype=dtype).reshape(shape)
     data = data.transpose()
     constant.raw_data = data.tobytes()
 
@@ -145,6 +146,13 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
             attributes: a dict of attributes like seq_len, batch_size, etc.
 """
 def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
+    # convert all symbolic shapes to fixed shapes (TODO: don't support any form of dynamic shape atm)
+    for input in model.graph.input:
+        for dim in input.type.tensor_type.shape.dim:
+            if dim.dim_param != "":
+                # symbolic shape, query the actual value and update
+                dim.dim_value = attributes[dim.dim_param]
+
     changed = True
     iter = 0
     while changed:
@@ -154,15 +162,62 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
         graph = model.graph
         changed = False
         to_remove = []
+
         for node in graph.node:
             if node in to_remove:
                 continue
 
-            # TODO: remove casts at the boundary 
+            # remove fp32 <-> fp16 casts at the boundary, we'll assume input and outputs are fp16
+            if node.op_type == "Cast" and iter == 1:
+                cast_input_name = node.input[0]
+                cast_output_name = node.output[0]
+                cast_to = node.attribute[0].i
+
+                # check if input is an input to the model
+                for i in graph.input:
+                    if i.name == cast_input_name:
+                        # it is casting an input, remove the cast
+                        # first update all the consumers to use the input directly
+                        consumers = m.consumers[node.name][cast_output_name]
+                        for consumer in consumers:
+                            # directly connect to the input (all uses)
+                            consumer_new_input_list = []
+                            while len(consumer.input):
+                                t = consumer.input.pop()
+                                if t == cast_output_name:
+                                    consumer_new_input_list.append(cast_input_name)
+                                else:
+                                    consumer_new_input_list.append(t)
+                            # add them back
+                            while len(consumer_new_input_list):
+                                consumer_input = consumer_new_input_list.pop()
+                                consumer.input.append(consumer_input)
+
+                            # update the input data type
+                            i.type.tensor_type.elem_type = cast_to
+
+                            # remove the cast node
+                            to_remove.append(node)
+
+                        break
+                else:
+                    # or, check if the output is an output of the model
+                    for o in graph.output:
+                        if o.name == cast_output_name:
+                            # cast is directly used by an output
+                            # TODO: right now, skipping if it has more uses by other intermediate nodes
+                            assert len(m.consumers[node.name][cast_output_name]) == 0 # just an output, no consumers
+                            o.name = cast_input_name
+                            # how to find the original type
+                            o.type.tensor_type.elem_type = onnx.TensorProto.FLOAT16
+                            logging.warn("TODO: output cast dtype is hardcoded to be float16")
+                            to_remove.append(node)
+                            break
+                
 
             # MatMul -> bias -> fast gelu fusion
             # Matmul -> add -> add fusion
-            if node.op_type == "MatMul":
+            elif node.op_type == "MatMul":
                 next_node = next_trivially_fusable_node(node, m)
                 # ORT `FastGelu` node has contains the bias for the prev linear as well
                 if next_node != None and next_node.op_type == "FastGelu": 
@@ -276,7 +331,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 # this is not really an optimization, but if this doesn't have position_ids, add a default value
                 seq_len = attributes["seq_len"]
                 batch_size = attributes["batch_size"]
-                dtype = np.int64
+                dtype = np.int32
                 data = np.arange(0, seq_len, dtype=dtype).reshape(1, seq_len).repeat(batch_size, axis=0)
                 init_node_name = "__default_pos_ids"
                 # check if this already exists (e.g., used for a different node)
@@ -296,6 +351,38 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 
                 # augment the EmbedLayerNormalization node to have this as input
                 node.input.append(init_node_name)
+
+            # convert Constant into initializers
+            elif node.op_type == "Constant":
+                assert node.attribute[0].name == "value" # any other cases are not properly handled here
+                tensor_proto = node.attribute[0].t
+                name = node.output[0]
+                tensor_proto.name = name
+                graph.initializer.append(tensor_proto)
+                to_remove.append(node)
+
+            # need to convert attention qkv_weight to column-major
+            elif node.op_type == "Attention":
+                qkv_weight_name = node.input[1]
+                qkv_bias_name = node.input[2]
+                qkv_weight_init = m.name2init[qkv_weight_name]
+                qkv_bias_init = m.name2init[qkv_bias_name]
+
+                weight_shape = list(qkv_weight_init.dims)
+                bias_shape = list(qkv_bias_init.dims)
+                
+                # check if weight is row-major
+                if weight_shape[-1] == bias_shape[-1]:
+                    # convert to column-major
+                    # TODO: for some reason values of the qkv_weight is not in raw_data, but as int32_data array
+                    #       hence, convert them to bytes
+                    if qkv_weight_init.raw_data == b'':
+                        data_bytes = numpy_helper.to_array(qkv_weight_init).tobytes()
+                        qkv_weight_init.raw_data = data_bytes
+                        # remove old int32_data
+                        del qkv_weight_init.int32_data[:len(qkv_weight_init.int32_data)]
+
+                    convert_row_major_constant_to_col_major(qkv_weight_init)
 
             ## TODO: add case for matmul with b as init to gemm_rcr_
             ## TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
@@ -334,8 +421,7 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
     # note - Will keep the inits as it is. Only thing we need to do is to set their names
     #       properly as AIT constants. The converted onnx graph that contains the custom op
     #       will still hold the correct initializer values and will be loaded correctly in
-    #       ORT if the names are properly mapped 
-
+    #       ORT if the names are properly mapped
     # setup inputs
     for input in inputs:
         tensor = create_tensor_from_onnx_value(input)

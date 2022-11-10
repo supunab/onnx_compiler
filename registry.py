@@ -4,8 +4,8 @@ from attr import attributes
 import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
-from aitemplate.frontend import nn
-from utils import clean_name, to_attribute_dict
+from aitemplate.frontend import nn, Tensor
+from utils import clean_name, to_attribute_dict, map_type
 
 def process_node(node: onnx.NodeProto, context: ConverterContext):
     # case-by-case logic for different node type
@@ -100,18 +100,19 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         context.add_tensor(output)
 
     elif op_type == "Attention":
-        seq_len = attributes["num_heads"]
+        num_heads = attributes["num_heads"].i
+        seq_len = context.attributes["seq_len"]
         batch_size = context.attributes["batch_size"]
         hidden_dim = context.attributes["hidden_size"]
 
         # TODO: here, we are giving up on some AIT fusion (e.g., has_residual = True would fuse the add with subsequent project)
         # note - we don't use the full MHA here. Full MHA has qkv_linear + attention + linear_bias + residual add
         #        however, we are only using this for qkv_linear + attention
-        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, qkv_bias=True, has_residual=False)
+        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, num_heads=num_heads, qkv_bias=True, has_residual=False)
         hidden_states = context.get_tensor(node.input[0])
         qkv_weight = context.get_tensor(node.input[1])
         qkv_bias = context.get_tensor(node.input[2])
-        mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
+        # mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
 
         # update the params to use tensor we created        
         mha.qkv.weight._tensor = qkv_weight

@@ -21,12 +21,19 @@ import sys
 import os
 
 sys.path.insert(1, os.path.abspath("./../../"))
-from converter import transform_graph
+from converter import transform_graph, compile
 import logging
+import click
 
-# TODO: attention_mask is ignored at the moment since there's no matching param in AIT Bert
-if __name__ == "__main__":
-    # logging.Logger.setLevel(logging.getLogger(), logging.DEBUG)
+@click.command()
+@click.option("--save_transform", is_flag=True)
+@click.option("--do_compile", is_flag=True)
+@click.option("--debug_logs", is_flag=True)
+def _run(save_transform: bool, do_compile: bool, debug_logs: bool):
+    if debug_logs:
+        logging.Logger.setLevel(logging.getLogger(), logging.DEBUG)
+    
+    # TODO: attention_mask is ignored at the moment since there's no matching param in AIT~ Bert
     
     # TODO: temp, just to test optimize_model
     model_path = "/work/models/bert_base/onnx_models/" + "bert_base_cased_3_fp16_gpu.onnx"
@@ -35,6 +42,19 @@ if __name__ == "__main__":
     hidden_size = 768
     seq_len = 512
 
+    attributes={
+        "batch_size": batch_size,
+        "hidden_size": hidden_size, 
+        "seq_len": seq_len}
+
     model = onnx.load_model(model_path)
-    transform_graph(model, attributes={"batch_size": batch_size, "hidden_size": hidden_size, "seq_len": seq_len})
-    onnx.save_model(model, "test.onnx")
+
+    if save_transform:
+        transform_graph(model, attributes={"batch_size": batch_size, "hidden_size": hidden_size, "seq_len": seq_len})
+        onnx.save_model(model, "test.onnx")
+
+    if do_compile:
+        compile(model, attributes=attributes)
+
+if __name__ == "__main__":
+    _run()
