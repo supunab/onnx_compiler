@@ -201,7 +201,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
             # selecting len(indices) amount of elements from axis dim, hence shape is with axis dim as len(indices)
             out_shape = data.shape()[:axis] + [len(indices.shape()),] +data.shape()[axis + 1 if axis>=0 else axis - 1:]
         output._attrs["name"] = output_name
-        output._attrs["shape"] = out_shape
+        output._attrs["shape"] = output._convert_shape(out_shape)
         context.add_tensor(output)
         
     # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)

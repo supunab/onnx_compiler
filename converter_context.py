@@ -25,10 +25,8 @@ class ConverterContext:
     def get_tensor(self, name: str) -> Tensor:
         return self.tensors[clean_name(name)]
 
-    def get_final_output(self) -> Tensor:
-        # TODO: what if there are more outputs?
-        assert len(self.outputs) == 1, "Only support cases where there's only one output"
-        return self.tensors[self.outputs[0]]
+    def get_final_output(self) -> list[Tensor]:
+        return list(map(lambda out: self.tensors[out], self.outputs))
 
     def get_inputs_and_constants(self) -> list[Tensor]:
         return list(map(lambda t: self.tensors[t], self.inputs)) \
