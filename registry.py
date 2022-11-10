@@ -45,7 +45,6 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         input = context.get_tensor(node.input[0])
         output_name = clean_name(node.output[0])
         output = ops.relu(input)
-        ops.gemm_rcr_bias_fast_gelu
 
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -63,23 +62,23 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         a = context.get_tensor(node.input[0])
         b = context.get_tensor(node.input[1])
 
-        if a._rank >= 2 and b._rank == 2:
+        if a._rank() >= 2 and b._rank() == 2:
             # this is a gemm
-            a_in = a if a._rank == 2 else ops.reshape()(a, [-1, a.shape()[-1]])
+            a_in = a if a._rank() == 2 else ops.reshape()(a, [-1, a.shape()[-1]])
             # all MatMul inputs are row-major because there's no transA, transB attributes
             output = ops.gemm_rrr()(a_in, b)
             # reshape the output
-            output = output if a._rank == 2 else ops.reshape()(a, a.shape()[:-1] + [b.shape()[-1]])
+            output = output if a._rank() == 2 else ops.reshape()(a, a.shape()[:-1] + [b.shape()[-1]])
             output_name = clean_name(node.output[0])
             output._attrs["name"] = output_name
             context.add_tensor(output)
 
-        elif a._rank > 2 and b._rank > 2:
+        elif a._rank() > 2 and b._rank() > 2:
             # this is a bmm
-            raise NotImplementedError(f"Matmul with A-rank:{a._rank} and B-rank:{b._rank} is not implemented yet")
+            raise NotImplementedError(f"Matmul with A-rank:{a._rank()} and B-rank:{b._rank()} is not implemented yet")
         else:
             # other cases are not implemented yet either
-            raise NotImplementedError(f"Matmul with A-rank:{a._rank} and B-rank:{b._rank} is not implemented yet")
+            raise NotImplementedError(f"Matmul with A-rank:{a._rank()} and B-rank:{b._rank()} is not implemented yet")
 
     elif op_type == "gemm_rcr_fast_gelu":
         # fused gemm + bias + fast_gelu node
@@ -87,7 +86,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         b = context.get_tensor(node.input[1])
         bias = context.get_tensor(node.input[2])
 
-        output = ops.gemm_rcr_bias_fast_gelu(a, b, bias)
+        output = ops.gemm_rcr_bias_fast_gelu()(a, b, bias)
         output_name = clean_name(node.output[0])
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -119,7 +118,10 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         mha.qkv.bias._tensor = qkv_bias
 
         intermediate = mha.qkv_proj(hidden_states)
-        output = mha.attention(intermediate)
+        output_4d = mha.attention(intermediate)
+        # output is 4d with (batch_size, seq_len, num_heads, hidden / num_heads)
+        # convert this to 3d (as the onnx attention op) so that the shape is (batch_size, seq_len, hidden)
+        output = ops.reshape()(output_4d, [output_4d.shape()[0], output_4d.shape()[1], -1])
         output_name = clean_name(node.output[0])
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -130,13 +132,14 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         bias_weight = context.get_tensor(node.input[2])
         residual_weight = context.get_tensor(node.input[3])
 
-        assert matmul_B._rank == 2
-        assert matmul_A._rank >= 2
+        assert matmul_B._rank() == 2, f"matmul B has to be rank-2, got rank {matmul_B._rank()}"
+        assert matmul_A._rank() >= 2, f"matmul A has to be rank>2, got rank {matmul_B._rank()}"
+        
+        matmul_A_in = matmul_A if matmul_A._rank() == 2 else ops.reshape()(matmul_A, [-1, matmul_A.shape()[-1]])
+        residual_weight_in = residual_weight if residual_weight._rank() == 2 else ops.reshape()(residual_weight, [-1, residual_weight.shape()[-1]])
 
-        matmul_A_in = matmul_A if matmul_A._rank == 2 else ops.reshape()(matmul_A, [-1, matmul_A.shape()[-1]])
-
-        output = ops.gemm_rcr_bias_add()(matmul_A_in, matmul_B, bias_weight, residual_weight)
-        output = output if matmul_A._rank == 2 else ops.reshape()(output, matmul_A.shape()[:-1] + [matmul_B.shape()[1]])
+        output = ops.gemm_rcr_bias_add()(matmul_A_in, matmul_B, bias_weight, residual_weight_in)
+        output = output if matmul_A._rank() == 2 else ops.reshape()(output, matmul_A.shape()[:-1] + [matmul_B.shape()[0]])
         output_name = clean_name(node.output[0])
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -146,9 +149,9 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         ln_weight = context.get_tensor(node.input[1])
         ln_bias = context.get_tensor(node.input[2])
 
-        hidden_size = context.attributes["hidden_size"]
-        epsilon = attributes["epsilon"]
-        output = ops.layernorm(hidden_size)(hidden_states, ln_weight, ln_bias, hidden_size, epsilon)
+        hidden_size = hidden_states.shape()[-1]
+        epsilon = attributes["epsilon"].f
+        output = ops.layernorm((hidden_size,))(x=hidden_states, gamma=ln_weight, beta=ln_bias, eps=epsilon)
         output_name = clean_name(node.output[0])
         output._attrs["name"] = output_name
         context.add_tensor(output)
@@ -165,7 +168,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         attention_mask = context.get_tensor(node.input[7]) # TODO: attention mask is not used in AIT bert_embedding?
         pos_ids = context.get_tensor(node.input[8])
 
-        epsilon = attributes["epsilon"]
+        epsilon = attributes["epsilon"].f
 
         # computes: embedding = layernorm(word_embedding + token_type_embedding + position_embedding)
         output = ops.bert_embeddings()(
@@ -184,13 +187,21 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         context.add_tensor(output)
 
     elif op_type == "Gather":
-        axis = attributes["axis"]
+        axis = attributes["axis"].i
         data = context.get_tensor(node.input[0])
         indices = context.get_tensor(node.input[1])
 
         output = ops.gather()(data, axis, indices)
         output_name = clean_name(node.output[0])
+        # TODO: need to explicitly set the shape since gather is dynamic
+        if len(indices.shape())==1:
+            # simply selecting one element from the axis, hence, the shape is without that dim
+            out_shape = data.shape()[:axis] + data.shape()[axis + 1 if axis>=0 else axis - 1:]
+        else:
+            # selecting len(indices) amount of elements from axis dim, hence shape is with axis dim as len(indices)
+            out_shape = data.shape()[:axis] + [len(indices.shape()),] +data.shape()[axis + 1 if axis>=0 else axis - 1:]
         output._attrs["name"] = output_name
+        output._attrs["shape"] = out_shape
         context.add_tensor(output)
         
     # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)

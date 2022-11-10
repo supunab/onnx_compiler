@@ -135,7 +135,10 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
     # change raw data
     dtype = map_onnx_dtype_to_numpy(constant.data_type)
     data = np.frombuffer(constant.raw_data, dtype=dtype).reshape(shape)
-    data = data.transpose()
+    # only transpose the last two dims
+    perm = np.arange(0, len(shape)).tolist()
+    perm[-1], perm[-2] = perm[-2], perm[-1]
+    data = data.transpose(perm)
     constant.raw_data = data.tobytes()
 
 """
@@ -265,7 +268,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                         matmul_b = m.name2init[matmul_b_name]
                         convert_row_major_constant_to_col_major(matmul_b)
 
-                        add1_other_input = next_node.input[0] if next_node.input[0] != node.output[0] else node.input[1]
+                        add1_other_input = next_node.input[0] if next_node.input[0] != node.output[0] else next_node.input[1]
                         add2_other_input = next_next_node.input[0] if next_next_node.input[0] != next_node.output[0] else next_next_node.input[1]
 
                         final_output_name = next_next_node.output[0]
@@ -318,7 +321,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 )
                 # find attributes and add them to ln_node
                 for attr in node.attribute:
-                    if attr in ["axis", "epsilon", "stash_type"]:
+                    if attr.name in ["axis", "epsilon", "stash_type"]:
                         ln_node.attribute.append(attr)
 
                 # add newly created nodes
