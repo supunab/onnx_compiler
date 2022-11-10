@@ -78,7 +78,7 @@ def generate(context: ConverterContext, folder: str, output_shape: dict = {}, in
         # TODO(supuna): in some cases, shape inference fails, need to explicitly specify the output shape
         shape = list(map(lambda x: x.value(), output.shape()))
         shape = output_shape[name] if name in output_shape else shape
-        assert not 0 in shape, "0 usually indicates, shape inference failed, probably need to explicitly provide output shape" 
+        assert not 0 in shape, f"0 usually indicates, shape inference failed, probably need to explicitly provide output shape (output={name}, shape={shape})" 
 
         shape_str = str(shape)[1:-1]
         rank = len(shape)

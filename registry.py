@@ -194,12 +194,12 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         output = ops.gather()(data, axis, indices)
         output_name = clean_name(node.output[0])
         # TODO: need to explicitly set the shape since gather is dynamic
-        if len(indices.shape())==1:
+        if indices._rank()==0:
             # simply selecting one element from the axis, hence, the shape is without that dim
             out_shape = data.shape()[:axis] + data.shape()[axis + 1 if axis>=0 else axis - 1:]
         else:
             # selecting len(indices) amount of elements from axis dim, hence shape is with axis dim as len(indices)
-            out_shape = data.shape()[:axis] + [len(indices.shape()),] +data.shape()[axis + 1 if axis>=0 else axis - 1:]
+            out_shape = data.shape()[:axis] + [indices.shape[0],] +data.shape()[axis + 1 if axis>=0 else axis - 1:]
         output._attrs["name"] = output_name
         output._attrs["shape"] = output._convert_shape(out_shape)
         context.add_tensor(output)

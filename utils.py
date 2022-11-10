@@ -45,6 +45,8 @@ def map_type_to_onnx_str(type) -> str:
         return "ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8"
     elif type == "int64":
         return "ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64"
+    elif type == "int32":
+        return "ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32"
     else:
         raise NotImplementedError(f"type mapping for {type} is not implemented yet")
 
