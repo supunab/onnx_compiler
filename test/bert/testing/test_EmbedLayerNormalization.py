@@ -14,20 +14,20 @@ import onnx
 import onnxruntime as ort
 
 
-# batch_size = 2
-# seq_len = 512
-# hidden_size = 768
-# embed_size = 768
-# vocab_size = 28996
-# token_types = 2
+batch_size = 2
+seq_len = 512
+hidden_size = 768
+embed_size = 768
+vocab_size = 28996
+token_types = 2
 epsilon = 9.999999960041972e-13
 
-batch_size = 1
-seq_len = 1
-hidden_size = 8
-embed_size = 8
-vocab_size = 4
-token_types = 2
+# batch_size = 1
+# seq_len = 1
+# hidden_size = 8
+# embed_size = 8
+# vocab_size = 4
+# token_types = 2
 
 ait_build_folder = "./tmp/"
 model_name = "ELN_test"
@@ -160,7 +160,6 @@ def run_onnx_original(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, t
     session.run_with_iobinding(io_binding)
     eln_output = output_orts[0].numpy()
     mask_index_output = output_orts[1].numpy()
-    print(f"mask_index: {mask_index_output}")
     return eln_output
 
 def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray):
@@ -200,14 +199,11 @@ def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_n
 def generate_inputs():
     np.random.seed(42)
     input_ids_np = np.random.randint(1, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
-    input_ids_np[0][0] = 2
-    input_ids_np[0][1] = 1
 
     # attention mask: int32[batch_size, seq_len] -- all ones for now since this is ignored in AIT
-    attention_mask_np = np.ones_like(input_ids_np, dtype=np.int32)
+    attention_mask_np = np.zeros_like(input_ids_np, dtype=np.int32)
     # token_type_ids: to identify segments of the input sequence. Let's do all zeros for now
     token_type_np = np.zeros_like(input_ids_np, dtype=np.int32)
-    print(input_ids_np)
     return (input_ids_np, attention_mask_np, token_type_np)
 
 
