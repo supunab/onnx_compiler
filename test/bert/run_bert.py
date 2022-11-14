@@ -87,7 +87,7 @@ def _run():
     # input ids: int32[batch_size, seq_len]
     input_ids_np = np.random.randint(1, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
     # attention mask: int32[batch_size, seq_len] -- all ones for now since this is ignored in AIT
-    attention_mask_np = np.ones_like(input_ids_np, dtype=np.int32)
+    attention_mask_np = np.zeros_like(input_ids_np, dtype=np.int32)
     # token_type_ids: to identify segments of the input sequence. Let's do all zeros for now
     token_type_np = np.zeros_like(input_ids_np, dtype=np.int32)
 

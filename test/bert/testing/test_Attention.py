@@ -1,5 +1,5 @@
 """
-Testing the correctness of EmbedLayerNormalization
+Testing the correctness of Attention
 """
 from __future__ import annotations
 import sys
@@ -22,23 +22,26 @@ vocab_size = 28996
 token_types = 2
 epsilon = 9.999999960041972e-13
 
-batch_size = 1
-seq_len = 1
-hidden_size = 8
-embed_size = 8
-vocab_size = 4
-token_types = 2
+# batch_size = 1
+# seq_len = 1
+# hidden_size = 8
+# embed_size = 8
+# vocab_size = 4
+# token_types = 2
 
 ait_build_folder = "./tmp/"
-model_name = "ELN_test"
-converted_model = "eln_converted.onnx"
+model_name = "Attn_test"
+converted_model = "attn_converted.onnx"
 
 def create_graph():
     from onnx import helper
     from onnx import TensorProto
     # setup inputs
-    input_names = ["input_ids", "token_type_ids", "word_embedding", "pos_embedding", "token_type_embedding", 
-                "ln_weight", "ln_bias", "attention_mask"]
+    input_emb_name = "input_embed"
+    mask_index_name = "mask_index"
+    qkv_weight_name = "qkv_weight"
+    qkv_bias_name = "qkv_bias"
+
 
     input_ids = helper.make_tensor_value_info(input_names[0], TensorProto.INT32, [batch_size, seq_len])
     token_type_ids = helper.make_tensor_value_info(input_names[1], TensorProto.INT32, [batch_size, seq_len])
@@ -50,21 +53,18 @@ def create_graph():
     dtype = np.float16
     onnx_dtype = map_np_type_to_onnx(dtype)
 
-    def _make_init(name: str, shape: list, zero = False):
+    def _make_init(name: str, shape: list):
         np_data = np.random.rand(*shape).astype(dtype)
-        if zero:
-            np_data = np.zeros_like(np_data)
         return helper.make_tensor(name, onnx_dtype, np_data.shape, np_data.tobytes(), raw=True)
 
     word_embedding_init = _make_init(input_names[2], [vocab_size, embed_size])
-    pos_embedding_init = _make_init(input_names[3], [seq_len, embed_size], True)
-    token_type_embedding_init = _make_init(input_names[4], [token_types, embed_size], True)
+    pos_embedding_init = _make_init(input_names[3], [seq_len, embed_size])
+    token_type_embedding_init = _make_init(input_names[4], [token_types, embed_size])
     ln_weight_init = _make_init(input_names[5], [hidden_size])
     ln_bias_init = _make_init(input_names[6], [hidden_size])
     inits = [word_embedding_init, pos_embedding_init, token_type_embedding_init, ln_weight_init, ln_bias_init]
     
-    # embed_out is before output before layer norm (see onnxruntime/core/graph/contrib_ops/bert_defs.cc)
-    output_names = ["elm_output", "mask_index", "embed_out"]
+    output_names = ["elm_output", "mask_index"]
     node = helper.make_node(
         op_type="EmbedLayerNormalization",
         inputs = input_names,
@@ -77,8 +77,7 @@ def create_graph():
     # outputs
     elm_output = helper.make_tensor_value_info(output_names[0], TensorProto.FLOAT16, [batch_size, seq_len, hidden_size])
     mask_index_output = helper.make_tensor_value_info(output_names[1], TensorProto.INT32, [batch_size])
-    embed_out = helper.make_tensor_value_info(output_names[2], TensorProto.FLOAT16, [batch_size, seq_len, hidden_size])
-    outputs = [elm_output, mask_index_output, embed_out]
+    outputs = [elm_output, mask_index_output]
 
     graph = helper.make_graph([node], "elm-graph", inputs, outputs, inits)
     model = helper.make_model(graph)
@@ -92,10 +91,8 @@ def build_ait_custom_op():
     
     model = create_graph()
 
-    # remove mask_index and embed_out outputs since it's not an output in AIT
+    # remove mask_index output since it's not an output in AIT
     model.graph.output.pop()
-    model.graph.output.pop()
-    model.graph.node[0].output.pop()
     model.graph.node[0].output.pop()
 
     attributes={
@@ -142,11 +139,7 @@ def ort_io_binding(session: ort.InferenceSession, input_ids_np: np.ndarray, atte
         mask_index_ort = ort.OrtValue.ortvalue_from_shape_and_type([batch_size], np.int32, "cuda", 0)
         _bind_io_output(io_binding, mask_index_name, mask_index_ort, np.int32)
 
-        embed_out_name = session.get_outputs()[2].name
-        embed_out_ort = ort.OrtValue.ortvalue_from_shape_and_type([batch_size, seq_len, hidden_size], np.float16, "cuda", 0)
-        _bind_io_output(io_binding, embed_out_name, embed_out_ort, np.float16)
-
-    output_orts = [elm_output_ort] if one_output else [elm_output_ort, mask_index_ort, embed_out_ort]
+    output_orts = [elm_output_ort] if one_output else [elm_output_ort, mask_index_ort]
     return (io_binding, output_orts)
 
 
@@ -169,9 +162,7 @@ def run_onnx_original(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, t
 
     session.run_with_iobinding(io_binding)
     eln_output = output_orts[0].numpy()
-    mask_index_output = output_orts[1].numpy() # this is basically the first 0 (or word count if no zeros) in the attention mask for each sample in batch
-    embed_out = output_orts[2].numpy() # output before layer norm
-    print(f"embed out:\n{embed_out}")
+    mask_index_output = output_orts[1].numpy()
     return eln_output
 
 def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray):
@@ -186,10 +177,10 @@ def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_n
     import torch
     import torch.nn as nn
     input_emb_op = nn.Embedding(vocab_size, embed_size, _weight = torch.from_numpy(weights["word_embedding"])).cuda().half()
-    type_emb_op = nn.Embedding(token_types, embed_size, _weight = torch.from_numpy(weights["token_type_embedding"])).cuda().half()
+    type_emb_op = nn.Embedding(2, embed_size, _weight = torch.from_numpy(weights["token_type_embedding"])).cuda().half()
     pos_emb_op = nn.Embedding(seq_len, embed_size, _weight = torch.from_numpy(weights["pos_embedding"])).cuda().half()
 
-    ln_op = nn.LayerNorm(hidden_size, eps=epsilon, elementwise_affine=False).cuda().half()
+    ln_op = nn.LayerNorm((hidden_size, ), eps=epsilon, elementwise_affine=True).cuda().half()
     ln_op.weight = nn.Parameter(torch.from_numpy(weights["ln_weight"]).cuda().half(), requires_grad=False)
     ln_op.bias = nn.Parameter(torch.from_numpy(weights["ln_bias"]).cuda().half(), requires_grad=False)
 
@@ -204,34 +195,16 @@ def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_n
     pos_emb = pos_emb_op(pos_ids)
 
     emb = input_emb + token_type_emb + pos_emb
-    print(input_emb)
-    print(token_type_emb)
-    print(pos_emb)
-    print(emb)
-
     out = ln_op(emb)
     return out.detach().cpu().numpy()
 
-"""
-full_emb
-full_emb = torch.tensor([1.4502, 1.0908, 1.8184, 2.0488, 1.5762, 1.9473, 1.6865, 1.3652]).cuda().half()
-
-ln(full_emb)
-tensor([-0.5796, -1.7852,  0.6558,  1.4287, -0.1569,  1.0879,  0.2134, -0.8647],
-       device='cuda:0', dtype=torch.float16)
-
-ln_out * ln_weight + ln_bias
-tensor([ 0.2328, -0.2815,  0.5068,  1.3945,  0.9668,  0.8223,  0.7036, -0.1880],
-       device='cuda:0', dtype=torch.float16)
-"""
 
 def generate_inputs():
     np.random.seed(42)
-    input_ids_np = np.random.randint(0, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
-    input_ids_np[0][0] = 0
-    # attention mask: int32[batch_size, seq_len] -- all ones (i.e., no masking) for now since this is ignored in AIT
-    attention_mask_np = np.ones_like(input_ids_np, dtype=np.int32)
-    attention_mask_np += 1
+    input_ids_np = np.random.randint(1, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
+
+    # attention mask: int32[batch_size, seq_len] -- all ones for now since this is ignored in AIT
+    attention_mask_np = np.zeros_like(input_ids_np, dtype=np.int32)
     # token_type_ids: to identify segments of the input sequence. Let's do all zeros for now
     token_type_np = np.zeros_like(input_ids_np, dtype=np.int32)
     return (input_ids_np, attention_mask_np, token_type_np)
@@ -255,7 +228,7 @@ def _run(build: bool, run: bool):
         pt_out = run_pt(input_ids_np, attention_mask_np, token_type_np)
         original_output = run_onnx_original(input_ids_np, attention_mask_np, token_type_np)
         custom_op_output = run_ait_custom_op(input_ids_np, attention_mask_np, token_type_np)
-        if np.allclose(original_output, custom_op_output, atol=0.1) and np.allclose(pt_out, custom_op_output, atol=0.1):
+        if np.allclose(original_output, custom_op_output, atol=0.1):
             print("Outputs matched!")
         else:
             print("Outputs don't match!")
