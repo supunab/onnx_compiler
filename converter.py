@@ -7,7 +7,7 @@ import onnx
 from aitemplate.frontend import Tensor
 from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
-from converter_context import ConverterContext
+from converter_context import ConverterContext, ModelWraper
 from registry import process_node
 from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx, map_onnx_dtype_to_numpy
 import numpy as np
@@ -43,65 +43,6 @@ def create_tensor_from_onnx_init(onnx_init: onnx.TensorProto) -> Tensor:
     dtype = map_type(onnx_init.data_type)
     return Tensor(shape=shape, name=name, dtype=dtype)
 
-
-## a wrapper for onnx graphs that contain an indexed graphical representation
-class ModelWraper:
-    def __init__(self, model):
-        self.model = model
-        self.graph = model.graph
-        consumers, outputs, producers = ModelWraper._find_consumers(model.graph)
-        self.consumers = consumers
-        self.outputs = outputs # not to be confused with the actual outputs of the full model (instead, it is output of each node)
-        self.producers = producers
-        self.removed_nodes = set()
-
-        self.name2init = {}
-        for init in model.graph.initializer:
-            self.name2init[init.name] = init
-    
-    def is_init(self, name: str) -> bool:
-        return name in self.name2init
-
-
-    def _find_consumers(graph: onnx.GraphProto) -> dict:
-        # note - cannot assume topological ordering
-        i = 0 # to uniquely name nodes without names
-        consumers = {} # consumers for a given node's given output
-        outputs = {} # outputs produced by a given node
-        producers = {} # producer of a particular tensor (name)
-        # populate producers with inputs and inits
-        for init in graph.initializer:
-            if init.name == "":
-                init.name = f"node_{i}"
-                i += 1
-            producers[init.name] = init
-            consumers[init.name] = {init.name : []}
-        for input in graph.input:
-            if input.name == "":
-                input.name = f"node_{i}"
-                i += 1
-            producers[input.name] = input
-            consumers[input.name] = {input.name : []}
-
-        for node in graph.node:
-            if node.name == "":
-                node.name = f"node_{i}"
-                i +=1 
-            consumers[node.name] = {}
-            output_names = list(node.output)
-            outputs[node.name] = output_names
-            # if node.name == "BiasGelu_Approximation_0":
-            #     print(output_names)
-            for output in output_names:
-                producers[output] = node
-                consumers[node.name][output] = []
-            
-            input_names = list(node.input)
-            for input in input_names:
-                producer = producers[input]
-                consumers[producer.name][input].append(node)
-        return consumers, outputs, producers
-            
 
 def next_trivially_fusable_node(curr_node: onnx.NodeProto, model: ModelWraper):
     # this is only for cases where there's a single output, that's connected to single consumer
@@ -141,6 +82,47 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
     data = data.transpose(perm)
     constant.raw_data = data.tobytes()
 
+def remove_attention_mask_hack(model: onnx.ModelProto):
+    for node in model.graph.node:
+        if node.op_type == "EmbedLayerNormalization":
+            # remove the 8th (last) input
+            name = node.input[7]
+            node.input.remove(name)
+            # remove from graph inputs
+            to_remove = None
+            for input in model.graph.input:
+                if name == input.name:
+                    to_remove = input
+                    break
+            model.graph.input.remove(to_remove)
+            break
+
+
+def clean_name_graph(model: onnx.ModelProto):
+    """
+    Convert all the names (inputs, inits, outputs) to the "cleaned" name using clean_name()
+    """
+    graph = model.graph
+    # clean inputs
+    for input in graph.input:
+        input.name = clean_name(input.name)
+    
+    # clean outputs
+    for output in graph.output:
+        output.name = clean_name(output.name)
+
+    # clean inits
+    for init in graph.initializer:
+        init.name = clean_name(init.name)
+
+    # clean node inputs and outputs
+    for node in graph.node:
+        for i in range(len(node.output)):
+            node.output[i] = clean_name(node.output[i])
+        for i in range(len(node.input)):
+            node.input[i] = clean_name(node.input[i])
+    
+
 """
 (in-place) graph level transformations. Mostly for changing nodes (e.g., Matmul --> GEMM) and fusing (GEMM + fast_gelu) so that
            corresponding optimized backend op can be directly used
@@ -155,6 +137,9 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
             if dim.dim_param != "":
                 # symbolic shape, query the actual value and update
                 dim.dim_value = attributes[dim.dim_param]
+
+    # clean names for convinience
+    clean_name_graph(model)
 
     changed = True
     iter = 0
@@ -414,7 +399,10 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
     """
     graph = model.graph
     transform_graph(model, attributes)
-    context = ConverterContext(graph, attributes)
+    # TODO: hack, do this properly
+    remove_attention_mask_hack(model)
+    modelw = ModelWraper(model)
+    context = ConverterContext(graph, modelw, attributes)
 
     # some notes
     nodes = graph.node

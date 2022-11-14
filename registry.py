@@ -5,7 +5,8 @@ import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
 from aitemplate.frontend import nn, Tensor
-from utils import clean_name, to_attribute_dict, map_type
+from utils import clean_name, map_onnx_dtype_to_numpy, to_attribute_dict, map_type
+import numpy as np
 
 def process_node(node: onnx.NodeProto, context: ConverterContext):
     # case-by-case logic for different node type
@@ -165,8 +166,9 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         token_type_embedding_weight = context.get_tensor(node.input[4])
         ln_weight = context.get_tensor(node.input[5])
         ln_bias = context.get_tensor(node.input[6])
-        attention_mask = context.get_tensor(node.input[7]) # TODO: attention mask is not used in AIT bert_embedding?
-        pos_ids = context.get_tensor(node.input[8])
+        # attention_mask = context.get_tensor(node.input[7]) # TODO: attention mask is not used in AIT bert_embedding?
+        # pos_ids = context.get_tensor(node.input[8])
+        pos_ids = context.get_tensor(node.input[7])
 
         epsilon = attributes["epsilon"].f
 
@@ -187,22 +189,68 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         context.add_tensor(output)
 
     elif op_type == "Gather":
+        """
+        Gather operates a bit differnet in ONNX vs. AIT (=PyTorch). In AIT, input and indices must have the same rank.
+        Output shape is equal to indices shape. 
+        out[i][j][k] = input[ indices[i][j][k] ][j][k] if axis = 0,
+        out[i][j][j] = input[i][ indices[i][j][k] ][k] if axis = 1, and so on
+
+        But in ONNX, you just give a list of ints as the indices and an axis, and the output will simply pick those indices from
+        the input tensor and not care about the other dims. 
+
+        (doing this here instead of during graph transformation because we have more shape information at this point)
+        """
         axis = attributes["axis"].i
         data = context.get_tensor(node.input[0])
         indices = context.get_tensor(node.input[1])
+        only_one_idx = indices._rank() == 0 # to make sure that the result of the gather drops the axis dim
+        if indices._rank() != data._rank():
+            # need to convert indices into the AIT/PT style
+            idx_init = context.modelw.name2init[indices._attrs["name"]]
+            assert indices._rank() <= 1
+            # read the const indices
+            values = np.frombuffer(idx_init.raw_data, dtype=map_onnx_dtype_to_numpy(idx_init.data_type))
+            # repeat values to create a tensor with the correct shape
+            shape = list(map(lambda x: x.value(), data.shape()))
+            product = 1
+            for i in shape:
+                product *= i
+            repeat_count = product / shape[axis]
+
+            # create a tensor with axis indices as the last dim
+            new_data = np.repeat(values, repeat_count).reshape(shape[:axis] + shape[axis+1:] + [len(values)])
+            # bring the axis dim into correct position
+            permute_order = []
+            for i in range(len(shape)):
+                if i < axis:
+                    permute_order.append(i)
+                elif i == axis:
+                    permute_order.append(len(shape) - 1)
+                else:
+                    permute_order.append(i - 1)
+            new_data = new_data.transpose(permute_order)
+
+            # update the initializer
+            idx_init.raw_data = new_data.tobytes()
+            for i in new_data.shape:
+                idx_init.dims.append(i)
+            
+            # create a new tensor with the updated shape
+            context.tensors[indices._attrs["name"]] = Tensor(shape=new_data.shape, name=indices._attrs["name"], dtype=map_type(idx_init.data_type))
+            # update the reference to the new tensor
+            indices = context.get_tensor(node.input[1])
 
         output = ops.gather()(data, axis, indices)
         output_name = clean_name(node.output[0])
-        # TODO: need to explicitly set the shape since gather is dynamic
-        if indices._rank()==0:
-            # simply selecting one element from the axis, hence, the shape is without that dim
+        if only_one_idx:
+            # need to reshape and drop the axis dim
             out_shape = data.shape()[:axis] + data.shape()[axis + 1 if axis>=0 else axis - 1:]
+            output_reshaped = ops.reshape()(output, out_shape)
+            output_reshaped._attrs["name"] = output_name
+            context.add_tensor(output_reshaped)
         else:
-            # selecting len(indices) amount of elements from axis dim, hence shape is with axis dim as len(indices)
-            out_shape = data.shape()[:axis] + [indices.shape[0],] +data.shape()[axis + 1 if axis>=0 else axis - 1:]
-        output._attrs["name"] = output_name
-        output._attrs["shape"] = output._convert_shape(out_shape)
-        context.add_tensor(output)
+            output._attrs["name"] = output_name
+            context.add_tensor(output)
         
     # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)
 
