@@ -5,6 +5,7 @@ import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
 from aitemplate.frontend import nn, Tensor
+from aitemplate.compiler.base import _NumpyConstantTensorData
 from utils import clean_name, map_onnx_dtype_to_numpy, to_attribute_dict, map_type
 import numpy as np
 
@@ -114,12 +115,22 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         qkv_bias = context.get_tensor(node.input[2])
         # mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
 
+        # set cu_length (required by flash_attention)
+        cu_length = context.get_tensor("cu_length")
+        mha.cu_length._tensor = cu_length
+
         # update the params to use tensor we created        
         mha.qkv.weight._tensor = qkv_weight
         mha.qkv.bias._tensor = qkv_bias
 
         intermediate = mha.qkv_proj(hidden_states)
         output_4d = mha.attention(intermediate)
+        # in some cases (e.g., is mha.use_flash = true), the output shape is 3d for some reason (probably a missing reshape in AIT)
+        # that is, output shape = [batch*seq_len, num_heads, hidden / num_heads]
+        # let's reshape to be consistent
+        if output_4d._rank() == 3:
+            output_4d = ops.reshape()(output_4d, [batch_size, seq_len, output_4d.shape()[-2], output_4d.shape()[-1]])
+        assert output_4d._rank() == 4
         # output is 4d with (batch_size, seq_len, num_heads, hidden / num_heads)
         # convert this to 3d (as the onnx attention op) so that the shape is (batch_size, seq_len, hidden)
         output = ops.reshape()(output_4d, [output_4d.shape()[0], output_4d.shape()[1], -1])
@@ -135,7 +146,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
         assert matmul_B._rank() == 2, f"matmul B has to be rank-2, got rank {matmul_B._rank()}"
         assert matmul_A._rank() >= 2, f"matmul A has to be rank>2, got rank {matmul_B._rank()}"
-        
+
         matmul_A_in = matmul_A if matmul_A._rank() == 2 else ops.reshape()(matmul_A, [-1, matmul_A.shape()[-1]])
         residual_weight_in = residual_weight if residual_weight._rank() == 2 else ops.reshape()(residual_weight, [-1, residual_weight.shape()[-1]])
 

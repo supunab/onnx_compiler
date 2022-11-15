@@ -350,6 +350,8 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 to_remove.append(node)
 
             # need to convert attention qkv_weight to column-major
+            # also need to add cu_length that is required for flash_attention
+            # (ideally, cu_length is an input, but just treated as a constant for now)
             elif node.op_type == "Attention":
                 qkv_weight_name = node.input[1]
                 qkv_bias_name = node.input[2]
@@ -371,6 +373,13 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                         del qkv_weight_init.int32_data[:len(qkv_weight_init.int32_data)]
 
                     convert_row_major_constant_to_col_major(qkv_weight_init)
+
+                # add cu_length as an init (if not already exists)
+                if not "cu_length" in [init.name for init in model.graph.initializer]:
+                    cu_lenght_np = np.array([i * seq_len for i in range(batch_size + 1)]).astype(np.int32)
+                    init = numpy_helper.from_array(cu_lenght_np)
+                    init.name = "cu_length"
+                    model.graph.initializer.append(init)
 
             ## TODO: add case for matmul with b as init to gemm_rcr_
             ## TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
