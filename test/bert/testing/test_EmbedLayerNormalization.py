@@ -22,16 +22,18 @@ vocab_size = 28996
 token_types = 2
 epsilon = 9.999999960041972e-13
 
-batch_size = 1
-seq_len = 1
-hidden_size = 8
-embed_size = 8
-vocab_size = 4
-token_types = 2
+# batch_size = 1
+# seq_len = 2
+# hidden_size = 8
+# embed_size = 8
+# vocab_size = 4
+# token_types = 2
 
 ait_build_folder = "./tmp/"
 model_name = "ELN_test"
 converted_model = "eln_converted.onnx"
+model_path = "eln_model.onnx"
+
 
 def create_graph():
     from onnx import helper
@@ -64,25 +66,25 @@ def create_graph():
     inits = [word_embedding_init, pos_embedding_init, token_type_embedding_init, ln_weight_init, ln_bias_init]
     
     # embed_out is before output before layer norm (see onnxruntime/core/graph/contrib_ops/bert_defs.cc)
-    output_names = ["elm_output", "mask_index", "embed_out"]
+    output_names = ["eln_output", "mask_index", "embed_out"]
     node = helper.make_node(
         op_type="EmbedLayerNormalization",
         inputs = input_names,
         outputs = output_names,
-        name="elm",
+        name="eln",
         domain="com.microsoft",
         epsilon=epsilon
     )
 
     # outputs
-    elm_output = helper.make_tensor_value_info(output_names[0], TensorProto.FLOAT16, [batch_size, seq_len, hidden_size])
+    eln_output = helper.make_tensor_value_info(output_names[0], TensorProto.FLOAT16, [batch_size, seq_len, hidden_size])
     mask_index_output = helper.make_tensor_value_info(output_names[1], TensorProto.INT32, [batch_size])
     embed_out = helper.make_tensor_value_info(output_names[2], TensorProto.FLOAT16, [batch_size, seq_len, hidden_size])
-    outputs = [elm_output, mask_index_output, embed_out]
+    outputs = [eln_output, mask_index_output, embed_out]
 
-    graph = helper.make_graph([node], "elm-graph", inputs, outputs, inits)
+    graph = helper.make_graph([node], "eln-graph", inputs, outputs, inits)
     model = helper.make_model(graph)
-    onnx.save_model(model, "elm_model.onnx")
+    onnx.save_model(model, model_path)
     return model
 
 
@@ -108,73 +110,56 @@ def build_ait_custom_op():
     convert_graph(model.graph, context, converted_model)
 
 
-def _bind_io_input(io_binding: ort.IOBinding, name: str, data_np: np.ndarray)->None:
-    data_ort = ort.OrtValue.ortvalue_from_numpy(data_np, "cuda", 0)
-    io_binding.bind_input(name=name, device_type=data_ort.device_name(), device_id=0, element_type=data_np.dtype,
-                            shape=data_ort.shape(), buffer_ptr=data_ort.data_ptr())
+def run_onnx(custom_op: bool):
+    (input_ids_np, attention_mask_np, token_type_np) = generate_inputs()
+    input_ids_ort = ort.OrtValue.ortvalue_from_numpy(input_ids_np, "cuda", 0)
+    attention_mask_ort = ort.OrtValue.ortvalue_from_numpy(attention_mask_np, "cuda", 0)
+    token_type_ort = ort.OrtValue.ortvalue_from_numpy(token_type_np, "cuda", 0)
 
-def _bind_io_output(io_binding: ort.IOBinding, name: str, ort_value: ort.OrtValue, elem_type)->None:
-    io_binding.bind_output(name=name, device_type=ort_value.device_name(), device_id=0, element_type=elem_type,
-                            shape=ort_value.shape(), buffer_ptr=ort_value.data_ptr())
+    if custom_op:
+        sess_options = ort.SessionOptions()
+        shared_lib = os.path.join(ait_build_folder, model_name, "test.so")
+        sess_options.register_custom_ops_library(shared_lib)
+        session = ort.InferenceSession(converted_model, sess_options=sess_options, providers=["CUDAExecutionProvider"])
+    else:
+        session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider"])
 
-def ort_io_binding(session: ort.InferenceSession, input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray, one_output: bool, no_attention_mask: bool):
-    io_binding = session.io_binding()
-    input_ids_name = session.get_inputs()[0].name
-    assert(input_ids_name == "input_ids")
-    _bind_io_input(io_binding, input_ids_name, input_ids_np)
+    eln_output_name = session.get_outputs()[0].name
+    assert(eln_output_name == "eln_output")
 
-    token_type_ids_name = session.get_inputs()[1].name
-    assert(token_type_ids_name == "token_type_ids")
-    _bind_io_input(io_binding, token_type_ids_name, token_type_np)
-
-    if not no_attention_mask:
-        attention_mask_name = session.get_inputs()[2].name
-        assert(attention_mask_name == "attention_mask")
-        _bind_io_input(io_binding, attention_mask_name, attention_mask_np)
-
-    elm_output_name = session.get_outputs()[0].name
-    assert(elm_output_name == "elm_output")
-    elm_output_ort = ort.OrtValue.ortvalue_from_shape_and_type([batch_size, seq_len, hidden_size], np.float16, "cuda", 0)
-    _bind_io_output(io_binding, elm_output_name, elm_output_ort, np.float16)
-
-    if not one_output:
-        mask_index_name = session.get_outputs()[1].name
-        mask_index_ort = ort.OrtValue.ortvalue_from_shape_and_type([batch_size], np.int32, "cuda", 0)
-        _bind_io_output(io_binding, mask_index_name, mask_index_ort, np.int32)
-
+    output_names = [eln_output_name]
+    if not custom_op:
+        # original graph has two extra outputs
+        mask_index_output_name = session.get_outputs()[1].name
         embed_out_name = session.get_outputs()[2].name
-        embed_out_ort = ort.OrtValue.ortvalue_from_shape_and_type([batch_size, seq_len, hidden_size], np.float16, "cuda", 0)
-        _bind_io_output(io_binding, embed_out_name, embed_out_ort, np.float16)
+        
+        assert(mask_index_output_name == "mask_index")
+        assert(embed_out_name == "embed_out")
+        output_names += [mask_index_output_name, embed_out_name]
 
-    output_orts = [elm_output_ort] if one_output else [elm_output_ort, mask_index_ort, embed_out_ort]
-    return (io_binding, output_orts)
+    input_dict = {
+        "input_ids" : input_ids_ort,
+        "token_type_ids": token_type_ort
+    }
 
+    if not custom_op:
+        # original graph takes in extra input, attention_mask
+        input_dict["attention_mask"] = attention_mask_ort
 
-def run_ait_custom_op(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray):
-    sess_options = ort.SessionOptions()
-    shared_lib = os.path.join(ait_build_folder, model_name, "test.so")
-    sess_options.register_custom_ops_library(shared_lib)
-    session = ort.InferenceSession(converted_model, sess_options=sess_options, providers=["CUDAExecutionProvider"])
-    (io_binding, output_orts) = ort_io_binding(session, input_ids_np, attention_mask_np, token_type_np, one_output=True, no_attention_mask=True)
+    outputs = session.run_with_ort_values(output_names, input_dict)
 
-    session.run_with_iobinding(io_binding)
-    eln_output = output_orts[0].numpy()
+    eln_output = outputs[0].numpy()
+    if not custom_op:
+        mask_index = outputs[1].numpy()
+        embed_output = outputs[2].numpy()
+
+    # only eln_output is used for parity check
     return eln_output
 
 
-def run_onnx_original(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray):
-    model = "elm_model.onnx"
-    session = ort.InferenceSession(model, providers=["CUDAExecutionProvider"])
-    (io_binding, output_orts) = ort_io_binding(session, input_ids_np, attention_mask_np, token_type_np, one_output=False, no_attention_mask=False)
+def run_pt():
+    (input_ids_np, attention_mask_np, token_type_np) = generate_inputs()
 
-    session.run_with_iobinding(io_binding)
-    eln_output = output_orts[0].numpy()
-    mask_index_output = output_orts[1].numpy() # this is basically the first 0 (or word count if no zeros) in the attention mask for each sample in batch
-    embed_out = output_orts[2].numpy() # output before layer norm
-    print(f"embed out:\n{embed_out}")
-    return eln_output
-
-def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_np: np.ndarray):
     # need to obtain the weights
     model = onnx.load_model(converted_model)
     weights = {}
@@ -202,36 +187,22 @@ def run_pt(input_ids_np: np.ndarray, attention_mask_np: np.ndarray, token_type_n
     input_emb = input_emb_op(input_ids)
     token_type_emb = type_emb_op(token_type_ids)
     pos_emb = pos_emb_op(pos_ids)
-
     emb = input_emb + token_type_emb + pos_emb
-    print(input_emb)
-    print(token_type_emb)
-    print(pos_emb)
-    print(emb)
-
     out = ln_op(emb)
     return out.detach().cpu().numpy()
 
-"""
-full_emb
-full_emb = torch.tensor([1.4502, 1.0908, 1.8184, 2.0488, 1.5762, 1.9473, 1.6865, 1.3652]).cuda().half()
-
-ln(full_emb)
-tensor([-0.5796, -1.7852,  0.6558,  1.4287, -0.1569,  1.0879,  0.2134, -0.8647],
-       device='cuda:0', dtype=torch.float16)
-
-ln_out * ln_weight + ln_bias
-tensor([ 0.2328, -0.2815,  0.5068,  1.3945,  0.9668,  0.8223,  0.7036, -0.1880],
-       device='cuda:0', dtype=torch.float16)
-"""
 
 def generate_inputs():
     np.random.seed(42)
-    input_ids_np = np.random.randint(0, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
-    input_ids_np[0][0] = 0
-    # attention mask: int32[batch_size, seq_len] -- all ones (i.e., no masking) for now since this is ignored in AIT
+    input_ids_np = np.random.randint(1, vocab_size, size=(batch_size, seq_len), dtype=np.int32)
+    input_ids_np[0][0] = 2
+    input_ids_np[0][1] = 3
+
+    # attention_mask doesn't have any influence in the EmberLayerNormalization calculation
+    # only used to produce mask_index which is the first zero value of each sentence 
+    # (i.e., lenght of actual sentence without padding) 
     attention_mask_np = np.ones_like(input_ids_np, dtype=np.int32)
-    attention_mask_np += 1
+
     # token_type_ids: to identify segments of the input sequence. Let's do all zeros for now
     token_type_np = np.zeros_like(input_ids_np, dtype=np.int32)
     return (input_ids_np, attention_mask_np, token_type_np)
@@ -250,19 +221,16 @@ def _run(build: bool, run: bool):
     elif run:
         logging.info("Running to check parity...")
 
-        # run on the same inputs and check parity
-        (input_ids_np, attention_mask_np, token_type_np) = generate_inputs()
-        pt_out = run_pt(input_ids_np, attention_mask_np, token_type_np)
-        original_output = run_onnx_original(input_ids_np, attention_mask_np, token_type_np)
-        custom_op_output = run_ait_custom_op(input_ids_np, attention_mask_np, token_type_np)
+        pt_out = run_pt()
+        original_output = run_onnx(custom_op=False)
+        custom_op_output = run_onnx(custom_op=True)
         if np.allclose(original_output, custom_op_output, atol=0.1) and np.allclose(pt_out, custom_op_output, atol=0.1):
             print("Outputs matched!")
         else:
             print("Outputs don't match!")
+            print(f"pt output:\n{pt_out}")
             print(f"onnx original output:\n{original_output}")
             print(f"onnx custom op output:\n{custom_op_output}")
-            print(f"pt output:\n{pt_out}")
-
     else:
         logging.info("Please specify either --build or --run")
     
