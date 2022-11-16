@@ -12,3 +12,9 @@ ort_ait_custom_op_library.h
 **/ort_ait_custom_op_library.h
 *.obj
 *.so
+*.html
+
+# profiler related files
+*.nsys-rep
+*.sqlite
+*.qdrep

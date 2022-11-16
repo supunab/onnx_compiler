@@ -14,6 +14,68 @@ original_model_path = "/work/models/bert_base/onnx_models/bert_base_cased_3_fp16
 def _benchmark_ort(session, output_names, input_dict):
     session.run_with_ort_values(output_names, input_dict)
 
+def run_ait(bench: bool):
+    from aitemplate.compiler import Model
+    import onnx
+    from onnx import numpy_helper
+
+    logging.info("Running generated AIT code directly....")
+
+    # load the model
+    model = onnx.load_model(model_path)
+    graph = model.graph
+
+    # load the compiled .so
+    mod = Model(shared_lib)
+
+    # set constants
+    for init in graph.initializer:
+        name = init.name
+        np_data = numpy_helper.to_array(init)
+        ait_data = mod.numpy_to_ait_data(np_data)
+        mod.set_constant(name, ait_data)
+    
+
+    # setup inputs
+    input_dtype = np.int32
+    input_ids_np, attention_mask_np, token_type_np = generate_inputs(input_dtype)
+
+    input_ids_ait = mod.numpy_to_ait_data(input_ids_np)
+    token_type_ait = mod.numpy_to_ait_data(token_type_np)
+
+    inputs = {
+        "input_ids": input_ids_ait,
+        "token_type_ids": token_type_ait
+    }
+
+    # outputs
+    out1_ait = mod.numpy_to_ait_data(np.empty([batch_size, seq_len, hidden_size], dtype=np.float16))
+    out2_ait = mod.numpy_to_ait_data(np.empty([batch_size, hidden_size], dtype=np.float16))
+
+    outputs = {
+        "graph_output_cast_0": out1_ait,
+        "graph_output_cast_1": out2_ait
+    }
+
+    if bench:
+        # warm ups
+        for i in range(warm_ups):
+            mod.run(inputs, outputs, sync=True)
+        
+        start = time.time()
+        for i in range(repeats):
+            mod.run(inputs, outputs, sync=True)
+        end = time.time()
+        logging.info(f"Elapsed Time: {(end - start) / repeats * 1000}ms")
+    else:
+        start = time.time()
+        mod.run(inputs, outputs, sync=True)
+        end = time.time()
+        logging.info(f"Elapsed Time: {(end - start) * 1000}ms")
+
+    return (mod.ait_data_to_numpy(out1_ait), mod.ait_data_to_numpy(out2_ait)) 
+
+
 def run_onnx(custom_op: bool, bench: bool):
     logging.info(f"""Running {"AIT custom op" if custom_op else "ONNX original"}....""")
     input_dtype = np.int32 if custom_op else np.int64
@@ -48,12 +110,22 @@ def run_onnx(custom_op: bool, bench: bool):
         input_dict["attention_mask"] = attention_mask_ort
     
     output_names = [output1_name, output2_name]
-    start = time.time()
-    iter = 1
-    for i in range(iter):
+
+    if bench:
+        # warm ups
+        for i in range(warm_ups):
+            outputs = session.run_with_ort_values(output_names, input_dict)
+        
+        start = time.time()
+        for i in range(repeats):
+            outputs = session.run_with_ort_values(output_names, input_dict)
+        end = time.time()
+        logging.info(f"Elapsed Time: {(end - start) / repeats * 1000}ms")
+    else:
+        start = time.time()
         outputs = session.run_with_ort_values(output_names, input_dict)
-    end = time.time()
-    logging.info(f"Elapsed Time: {end - start}")
+        end = time.time()
+        logging.info(f"Elapsed Time: {(end - start) * 1000}ms")
     output1 = outputs[0].numpy()
     output2 = outputs[1].numpy()
 
@@ -83,22 +155,29 @@ def generate_inputs(dtype):
 @click.command()
 @click.option("--run_original", is_flag=True)
 @click.option("--run_custom", is_flag=True)
+@click.option("--run_ait_generated", is_flag=True)
 @click.option("--benchmark", is_flag=True)
-def _run(run_original: bool, run_custom: bool, benchmark: bool):
+def _run(run_original: bool, run_custom: bool, run_ait_generated: bool, benchmark: bool):
     if run_custom:
-        run_onnx(custom_op=True, bench=False)
+        run_onnx(custom_op=True, bench=benchmark)
 
-    if run_original:
-        run_onnx(custom_op=False, bench=False)
+    elif run_original:
+        run_onnx(custom_op=False, bench=benchmark)
 
-    if benchmark:
-        (out1_ait, out2_ait) = run_onnx(custom_op=True, bench=True)
+    elif run_ait_generated:
+        run_ait(bench=benchmark)
+
+    elif benchmark:
+        (out1_custom, out2_custom) = run_onnx(custom_op=True, bench=True)
         (out1_ort, out2_ort) = run_onnx(custom_op=False, bench=True)
+        # (out1_ait, out2_ait) = run_ait()  Note - manually verified the output is the same
 
-        if np.allclose(out2_ait, out2_ort, atol=0.1) and np.allclose(out1_ait, out1_ort, atol=0.1):
+        if np.allclose(out2_custom, out2_ort, atol=0.1) and np.allclose(out1_custom, out1_ort, atol=0.1):
             logging.info("Outputs matched, success!")
         else:
             logging.info("Outputs doesn't match, time to debug!")
+    else:
+        logging.info("Please specify --run_original --run_custom --run_ait_generated --benchmark")
 
 
 if __name__ == "__main__":

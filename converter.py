@@ -394,7 +394,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
 
     logging.info("Compelted graph optimize pass")
 
-def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False, attributes = {}) -> ConverterContext:
+def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str = "test_model", not_compile: bool = False, attributes = {}, return_out: bool = False) -> ConverterContext:
     """
     Compile the model to AIT model ops. The returned converter context contains all the input, intermediate, and output AIT Tensors. This 
     converter context then can be used in the rest of the code generation process (i.e., generating the custom op).
@@ -442,6 +442,8 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
             
         # tracing is done, compile the model
         output = context.get_final_output()
+        if return_out:
+            return output
         target = detect_target()
         compile_model(output, target, output_dir, model_name)
     else:

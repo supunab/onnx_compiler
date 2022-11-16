@@ -30,10 +30,11 @@ from common import *
 @click.command()
 @click.option('-st', "--save_transform", is_flag=True)
 @click.option('-c', "--do_compile", is_flag=True)
+@click.option("--visualize_ait_graph", is_flag=True)
 @click.option('-d', "--debug_logs", is_flag=True)
 @click.option('-m', "--model_path", default="/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx", help="optimized ONNX model path for BERT")
 @click.option('-ait', "--ait_build_folder", default="./tmp/", help="path to generate AIT sources")
-def _run(save_transform: bool, do_compile: bool, debug_logs: bool, model_path: str, ait_build_folder: str):
+def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str):
     """
     --to generate the optimized fp16 cuda onnx model for bert using ort--
     python -m onnxruntime.transformers.benchmark -m bert-base-cased -b 1 -t 10 -f fusion.csv -r result.csv -d detail.csv -c ./cache_models --onnx_dir ./onnx_models -o by_script -g -p fp16 -i 3 --use_mask_index --overwrite
@@ -42,9 +43,10 @@ def _run(save_transform: bool, do_compile: bool, debug_logs: bool, model_path: s
     if debug_logs:
         logging.Logger.setLevel(logging.getLogger(), logging.DEBUG)
 
-    if (not do_compile) and (not save_transform):
+    if (not do_compile) and (not save_transform) and (not visualize_ait_graph):
         logging.info("You must specify either --save_transform (to save the transformed graph for " + \
-                        " debug purposes) or --do_compile (to compile a custom op for the model)")
+                        " debug purposes) or --do_compile (to compile a custom op for the model)" + \
+                        "--visualize_ait_graph (to visualize the optimized AIT graph)")
     
     # TODO: attention_mask is ignored at the moment since there's no matching param in AIT~ Bert
     converted_model_path = "bert_converted.onnx"
@@ -65,6 +67,28 @@ def _run(save_transform: bool, do_compile: bool, debug_logs: bool, model_path: s
         context = compile(model, output_dir=ait_build_folder, model_name=model_name, attributes=attributes)
         generate(context, os.path.join(ait_build_folder, model_name))
         convert_graph(model.graph, context, converted_model_path)
+
+    if visualize_ait_graph:
+        outputs = compile(model, output_dir=ait_build_folder, model_name=model_name, attributes=attributes, return_out=True)
+        # pick the last output?
+        # Y = outputs[-1]
+        from aitemplate import compiler
+        from aitemplate.testing import detect_target
+        from aitemplate.utils.visualization import plot_graph
+        def apply_optimizations(tensors):
+            target = detect_target()
+            # first, convert output tensors to graph
+            with target:
+                graph = compiler.transform.toposort(tensors)
+                # second, provide names to the graph
+                compiler.transform.name_graph(graph)
+                compiler.transform.mark_param_tensor(graph)
+                compiler.transform.mark_special_views(graph)
+                # we can apply optimizations to the graph, or test single optimization pass on the graph
+                graph = compiler.transform.optimize_graph(graph, "./tmp")
+            return graph
+        graph = apply_optimizations(outputs)
+        plot_graph(graph, file_path="ait_bert_model.html", network_name="ait_bert")
 
 if __name__ == "__main__":
     _run()
