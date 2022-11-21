@@ -4,6 +4,7 @@ import os
 from torch import inference_mode
 
 from templates.custom_op import *
+from templates.makefile import *
 from converter_context import ConverterContext
 
 import onnx
@@ -11,6 +12,25 @@ from onnx import helper, save
 
 from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
+def generate_makefile(folder: str):
+    """
+    Generate Makefile to compile the generated AIT sources and ORT custom op header into a shared object
+    """
+    # find the .cu files
+    cu_files = []
+    for f in os.listdir(folder):
+        if f.endswith(".cu"):
+            cu_files.append(f[:-3])
+
+    obj_files = " ".join(list(map(lambda f: f + ".obj", cu_files)))
+    onnx_header_path = "/work/onnxruntime/include/"
+    ait_path = "/work/AITemplate/"
+    
+    with open(os.path.join(folder, "Makefile"), "w") as f:
+        f.write(
+            MAKEFILE_TEMPLATE.render(onnx_header_path=onnx_header_path, ait_path=ait_path, obj_files=obj_files)
+        )
+    
 # generate the .cu and .h file required for the custom op
 def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True):
     """
@@ -164,6 +184,8 @@ def generate(context: ConverterContext, folder: str, output_shape: dict = {}, in
     # header file
     with open(os.path.join(folder,"ort_ait_custom_op_library.h"), "w") as f:
         f.write(CUSTOM_OP_HEADER.render())
+    
+    generate_makefile(folder)
 
     if run_make:
         # build the shared object
