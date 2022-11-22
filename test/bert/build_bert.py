@@ -34,7 +34,9 @@ from common import *
 @click.option('-d', "--debug_logs", is_flag=True)
 @click.option('-m', "--model_path", default="/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx", help="optimized ONNX model path for BERT")
 @click.option('-ait', "--ait_build_folder", default="./tmp/", help="path to generate AIT sources")
-def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str):
+@click.option("--ait_path", help="location of the AIT sources (to include the headers during compilation) e.g., /work/AITemplate/", default="/work/AITemplate/")
+@click.option("--onnx_path", help="location of onnx headers (e.g., /work/onnxruntime/include/)", default="/work/onnxruntime/include/")
+def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str, ait_path: str, onnx_path: str):
     """
     --to generate the optimized fp16 cuda onnx model for bert using ort--
     python -m onnxruntime.transformers.benchmark -m bert-base-cased -b 1 -t 10 -f fusion.csv -r result.csv -d detail.csv -c ./cache_models --onnx_dir ./onnx_models -o by_script -g -p fp16 -i 3 --use_mask_index --overwrite
@@ -65,7 +67,7 @@ def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debu
 
     if do_compile:
         context = compile(model, output_dir=ait_build_folder, model_name=model_name, attributes=attributes)
-        generate(context, os.path.join(ait_build_folder, model_name))
+        generate(context, os.path.join(ait_build_folder, model_name), ait_path=ait_path, onnx_header_path=onnx_path)
         convert_graph(model.graph, context, converted_model_path)
 
     if visualize_ait_graph:

@@ -12,7 +12,7 @@ from onnx import helper, save
 
 from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
-def generate_makefile(folder: str):
+def generate_makefile(folder: str, onnx_header_path: str, ait_path: str):
     """
     Generate Makefile to compile the generated AIT sources and ORT custom op header into a shared object
     """
@@ -23,8 +23,6 @@ def generate_makefile(folder: str):
             cu_files.append(f[:-3])
 
     obj_files = " ".join(list(map(lambda f: f + ".obj", cu_files)))
-    onnx_header_path = "/work/onnxruntime/include/"
-    ait_path = "/work/AITemplate/"
     
     with open(os.path.join(folder, "Makefile"), "w") as f:
         f.write(
@@ -32,7 +30,7 @@ def generate_makefile(folder: str):
         )
     
 # generate the .cu and .h file required for the custom op
-def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True):
+def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True, onnx_header_path: str = "/work/onnxruntime/include/", ait_path: str = "/work/AITemplate/"):
     """
     output_shape -> explicitly provide the output_shape when onnx graph is incapable of inferencing
     inputs_order -> HACK! this is to assign the order in which we pass the ait input tensors to ait. Currently, has to manually
