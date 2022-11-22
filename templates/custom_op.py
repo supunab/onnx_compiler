@@ -111,7 +111,8 @@ struct AITKernel {
     auto stream_handle = reinterpret_cast<AITemplateStreamHandle>(ort_.KernelContext_GetGPUComputeStream(context));
     
     // TODO(supuna): do we need sync = true? does ort assume that the result is computed when it's returned from a kernel?
-    AITemplateModelContainerRun(handle, ait_inputs, {{num_inputs}}, ait_outputs, {{num_outputs}}, stream_handle, /* sync */ true, true, ait_output_shapes);
+    // TODO(supuna): graph mode is set to false since bert mem_efficient_attn fails in graph mode for some reason
+    AITemplateModelContainerRun(handle, ait_inputs, {{num_inputs}}, ait_outputs, {{num_outputs}}, stream_handle, /* sync */ true, /* graph_mode */ false, ait_output_shapes);
   }
 
  private:
