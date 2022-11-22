@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from attr import attributes
 import onnx
 from converter_context import ConverterContext
 from aitemplate.compiler import ops
