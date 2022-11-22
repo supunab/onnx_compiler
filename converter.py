@@ -445,6 +445,7 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
         if return_out:
             return output
         target = detect_target()
+        context.arch = target._arch
         compile_model(output, target, output_dir, model_name)
     else:
         # outputs will not be added to context since we're skipping process_node

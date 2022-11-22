@@ -72,6 +72,7 @@ class ConverterContext:
         self.initializers = list(map(lambda t: clean_name(t.name), graph.initializer))
         self.attributes = attributes
         self.modelw = modelw
+        self.arch = "" # arch of the gpu (used in codegen)
 
     def add_tensor(self, tensor: Tensor) -> None:
         name = tensor._attrs["name"]

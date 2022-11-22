@@ -12,9 +12,14 @@ from onnx import helper, save
 
 from utils import clean_name, map_type, map_type_to_onnx_str, map_type_to_ait_str
 
-def generate_makefile(folder: str, onnx_header_path: str, ait_path: str):
+def generate_makefile(folder: str, onnx_header_path: str, ait_path: str, arch: str):
     """
-    Generate Makefile to compile the generated AIT sources and ORT custom op header into a shared object
+    Generate Makefile to compile the generated AIT sources and ORT custom op header into a shared object.
+
+    folder: the destination where the Makefile should be generated
+    onnx_header_path: path to onnx headers (e.g., /work/onnxruntime/include/)
+    ait_path: path to ait sources (e.g., /work/AITemplate/)
+    arch: GPU architecture (e.g., 80 or 75)
     """
     # find the .cu files
     cu_files = []
@@ -26,7 +31,7 @@ def generate_makefile(folder: str, onnx_header_path: str, ait_path: str):
     
     with open(os.path.join(folder, "Makefile"), "w") as f:
         f.write(
-            MAKEFILE_TEMPLATE.render(onnx_header_path=onnx_header_path, ait_path=ait_path, obj_files=obj_files)
+            MAKEFILE_TEMPLATE.render(onnx_header_path=onnx_header_path, ait_path=ait_path, obj_files=obj_files, arch=arch)
         )
     
 # generate the .cu and .h file required for the custom op
@@ -183,7 +188,7 @@ def generate(context: ConverterContext, folder: str, output_shape: dict = {}, in
     with open(os.path.join(folder,"ort_ait_custom_op_library.h"), "w") as f:
         f.write(CUSTOM_OP_HEADER.render())
     
-    generate_makefile(folder, onnx_header_path, ait_path)
+    generate_makefile(folder, onnx_header_path, ait_path, context.arch)
 
     if run_make:
         # build the shared object
