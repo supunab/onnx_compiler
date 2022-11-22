@@ -183,7 +183,7 @@ def generate(context: ConverterContext, folder: str, output_shape: dict = {}, in
     with open(os.path.join(folder,"ort_ait_custom_op_library.h"), "w") as f:
         f.write(CUSTOM_OP_HEADER.render())
     
-    generate_makefile(folder)
+    generate_makefile(folder, onnx_header_path, ait_path)
 
     if run_make:
         # build the shared object
