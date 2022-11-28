@@ -2,6 +2,8 @@
 Converts an ONNX graph into an AITemplate graph
 """
 from __future__ import annotations
+import os
+import subprocess
 
 import onnx
 from aitemplate.frontend import Tensor
@@ -446,6 +448,12 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
             return output
         target = detect_target()
         context.arch = target._arch
+
+        # remove any already existing source files (otherwise might silently use prev compilation artifacts 
+        # even if the current compile fails)
+        full_path = os.path.abspath(output_dir + model_name)
+        subprocess.run(f"cd ${full_path} && rm *", shell=True)
+
         compile_model(output, target, output_dir, model_name)
     else:
         # outputs will not be added to context since we're skipping process_node

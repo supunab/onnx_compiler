@@ -108,7 +108,19 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         # TODO: here, we are giving up on some AIT fusion (e.g., has_residual = True would fuse the add with subsequent project)
         # note - we don't use the full MHA here. Full MHA has qkv_linear + attention + linear_bias + residual add
         #        however, we are only using this for qkv_linear + attention
-        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, num_heads=num_heads, qkv_bias=True, has_residual=False, use_mem_eff=False)
+        use_mem_eff = False
+        use_flash = False
+        unfused_attention = False
+        if "attn_type" in context.attributes:
+            if context.attributes["attn_type"] == "mem_eff":
+                use_mem_eff = True
+            elif context.attributes["attn_type"] == "flash":
+                use_flash = True
+            elif context.attributes["attn_type"] == "unfused":
+                unfused_attention = True
+        
+        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, num_heads=num_heads, qkv_bias=True,
+                         has_residual=False, use_mem_eff=use_mem_eff, force_use_flash=use_flash, force_unfused_attn=unfused_attention)
         hidden_states = context.get_tensor(node.input[0])
         qkv_weight = context.get_tensor(node.input[1])
         qkv_bias = context.get_tensor(node.input[2])

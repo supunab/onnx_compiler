@@ -27,16 +27,8 @@ import logging
 import click
 from common import *
 
-@click.command()
-@click.option('-st', "--save_transform", is_flag=True)
-@click.option('-c', "--do_compile", is_flag=True)
-@click.option("--visualize_ait_graph", is_flag=True)
-@click.option('-d', "--debug_logs", is_flag=True)
-@click.option('-m', "--model_path", default="/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx", help="optimized ONNX model path for BERT")
-@click.option('-ait', "--ait_build_folder", default="./tmp/", help="path to generate AIT sources")
-@click.option("--ait_path", help="location of the AIT sources (to include the headers during compilation) e.g., /work/AITemplate/", default="/work/AITemplate/")
-@click.option("--onnx_path", help="location of onnx headers (e.g., /work/onnxruntime/include/)", default="/work/onnxruntime/include/")
-def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str, ait_path: str, onnx_path: str):
+def build_bert(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str, ait_path: str, onnx_path: str, 
+         batch_size: int, hidden_size: int, seq_len: int, vocab_size: int, attn_type: str):
     """
     --to generate the optimized fp16 cuda onnx model for bert using ort--
     python -m onnxruntime.transformers.benchmark -m bert-base-cased -b 1 -t 10 -f fusion.csv -r result.csv -d detail.csv -c ./cache_models --onnx_dir ./onnx_models -o by_script -g -p fp16 -i 3 --use_mask_index --overwrite
@@ -54,10 +46,13 @@ def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debu
     converted_model_path = "bert_converted.onnx"
     model_name = "bert"
 
+    assert attn_type in {"mem_eff", "flash", "unfused", "default"}
     attributes={
         "batch_size": batch_size,
         "hidden_size": hidden_size, 
-        "seq_len": seq_len}
+        "seq_len": seq_len,
+        "attn_type": attn_type
+        }
 
     model = onnx.load_model(model_path)
 
@@ -92,5 +87,23 @@ def _run(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debu
         graph = apply_optimizations(outputs)
         plot_graph(graph, file_path="ait_bert_model.html", network_name="ait_bert")
 
+@click.command()
+@click.option('-st', "--save_transform", is_flag=True)
+@click.option('-c', "--do_compile", is_flag=True)
+@click.option("--visualize_ait_graph", is_flag=True)
+@click.option('-d', "--debug_logs", is_flag=True)
+@click.option('-m', "--model_path", default="/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx", help="optimized ONNX model path for BERT")
+@click.option('-ait', "--ait_build_folder", default="./tmp/", help="path to generate AIT sources")
+@click.option("--ait_path", help="location of the AIT sources (to include the headers during compilation) e.g., /work/AITemplate/", default="/work/AITemplate/")
+@click.option("--onnx_path", help="location of onnx headers (e.g., /work/onnxruntime/include/)", default="/work/onnxruntime/include/")
+@click.option("--batch_size", default=batch_size_default)
+@click.option("--hidden_size", default=hidden_size_default)
+@click.option("--seq_len", default=seq_len_default)
+@click.option("--vocab_size", default=vocab_size_default)
+@click.option("--attn_type", default="default", help="Choose one of {mem_eff, flash, unfused, default}")
+def _build_bert(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str, ait_path: str, onnx_path: str, 
+         batch_size: int, hidden_size: int, seq_len: int, vocab_size: int, attn_type: str):
+    build_bert(save_transform, do_compile, visualize_ait_graph, debug_logs, model_path, ait_build_folder, ait_path, onnx_path, batch_size, hidden_size, seq_len, vocab_size, attn_type)
+
 if __name__ == "__main__":
-    _run()
+    _build_bert()
