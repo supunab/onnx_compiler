@@ -14,6 +14,7 @@ ort_ait_custom_op_library.h
 *.so
 *.html
 test/bert/results_*
+test/bert/log_*
 
 # profiler related files
 *.nsys-rep
