@@ -17,10 +17,10 @@ def write_result(res_name: str, iter_time: float, fname: str):
 
 def parse_time(text: str):
     t = pattern.findall(text)
-    assert len(t) == 1, "Should only have one elapsed time value"
     if len(t) == 0:
         return -1
     else:
+        assert len(t) == 1, "Should only have one elapsed time value"
         return float(t[0].split(":")[1][1:-2])
 
 def append_log(fname: str, text: str):
@@ -30,7 +30,7 @@ def append_log(fname: str, text: str):
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.INFO)
     batch_sizes = [1, 2, 4, 8, 16, 32, 64, 128]
-    seq_lens = [64, 128, 384, 512]
+    seq_lens = [64, 128, 384, 512, 1024, 2048, 4096]
     hidden_sizes = [hidden_size_default]
     attn_type = ["flash", "mem_eff", "unfused"]
 
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     onnx_path = "/work/supun/onnxruntime/include/"
 
     data = {} # store the results
-    fname = f"results_{str(time.time()).split('.')[0]}"
+    fname = f"results_{str(time.time()).split('.')[0]}.csv"
     log_file = f"log_{str(time.time()).split('.')[0]}.log"
     for bs in batch_sizes:
         for sl in seq_lens:
