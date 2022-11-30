@@ -14,11 +14,11 @@ weight, hence, we cannot do the ORT weights --> AIT weight mapping for such case
 I found a different way of doing this (simpler way. should've done this in the first place). I don't export the SD Unet graph to onnx like I did before. Instead, I simply create the "converted" version that contains a single op and all weights as initializers and other inputs as inputs. This is created by loading the model from HuggingFace and then going through weights and creating initializer nodes for onnx graphs and then creating an onnx graph. Rest of the process remains the same. I generate the code that maps the onnx variable (in this case, have the same names) to AIT tensors. 
 
 
+Current Status: It runs, but there's a parity on the output. Haven't debuged it yet.
+
+
 ### Current Workflow
-1. Generate code for SD UNet using AIT (use `example/05_stable_diffusion`) and then copy the generated sources to some location
-
-
-1. Use `my_test.py` in `AITemplate/examples/05_stable_diffusion/` to generate the AIT sources for SD UNet model
+1. Use `my_test.py` in `AITemplate/examples/05_stable_diffusion/` to generate the AIT sources for SD UNet model (this file is in my fork)
     - This will save the `sd_unet.onnx` in the specified directory
 2. Use `stable_diffusion_build.py` in this directory to generate a custom op header for ORT that interaces with the generated AIT code
 3. Move the generated `ort_ait_custom_op_library.cu` to the place where the previously generated AIT sources lie
