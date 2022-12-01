@@ -1,11 +1,11 @@
 """
 Just trying to see if AIT mem efficient attention can support past_states and unidirectional attention
+TODO: currently only works for curr_seq_len = 1 only (because of the causal issue as mentioned in the TODO below)
 """
 
+from common import *
 
-## currently trying memory efficient attention
-if __name__ == "__main__":
-    from common import *
+def mem_eff_attention_unidirectional():
     from aitemplate.frontend import Tensor, nn
     from aitemplate.compiler import ops, compile_model
     from aitemplate.testing import detect_target
@@ -43,7 +43,10 @@ if __name__ == "__main__":
     # concatanate old keys to k
     full_k = ops.concatenate()([past_keys, k_reshaped], dim=2)
     full_v = ops.concatenate()([past_values, v_reshaped], dim=2)
-    attention_out = ops.mem_eff_attention(causal=True)(q_reshaped, full_k, full_v) # bs, sl, num_heads, hidden // num_heads
+    # TODO: causal shuld be True for unidirectional attention. However, the current implementation considers current sequence to start from position 0 if that's the case and
+    #       doesn't use "past" kv values to compute the attention. Therefore, as a workaround I'm using causal=True (only works for seq_len=1)
+    #       causal=True works without any issue for cases where we don't have past KV and all QKV comes fresh (i.e. seq_len_kv = seq_len_q)
+    attention_out = ops.mem_eff_attention(causal=False)(q_reshaped, full_k, full_v) # bs, sl, num_heads, hidden // num_heads
     attention_out_reshaped = ops.reshape()(attention_out, [batch_size, curr_seq_len, hidden_size])
 
     attention_out_reshaped._attrs["is_output"] = True
@@ -60,17 +63,19 @@ if __name__ == "__main__":
     target = detect_target()
     with compile_model([attention_out_reshaped, present0], target, "./tmp/", "mem_eff_attn") as module:
         # setup inputs
-        input_tensor = torch.randn([batch_size, curr_seq_len, hidden_size]).cuda().half()
-        past_keys_tensor = torch.randn([batch_size, num_heads, prev_seq_len, hidden_size // num_heads]).cuda().half()
-        past_values_tensor = torch.randn([batch_size, num_heads, prev_seq_len, hidden_size // num_heads]).cuda().half()
+        input_np, past0_np = generate_inputs()
+        input_tensor = torch.from_numpy(input_np).cuda().half()
+        past_keys_tensor = torch.from_numpy(past0_np[0]).cuda().half()
+        past_values_tensor = torch.from_numpy(past0_np[1]).cuda().half()
 
         # storage for output
         attention_out_tensor = torch.empty([batch_size, curr_seq_len, hidden_size]).cuda().half()
         present0 = torch.empty([2, batch_size, num_heads, prev_seq_len + curr_seq_len, hidden_size // num_heads]).cuda().half()
 
         # linear weights and bias
-        qkv_weight_tensor = torch.randn([hidden_size, 3*hidden_size]).cuda().half()
-        qkv_bias_tensor = torch.randn([3*hidden_size]).cuda().half()
+        qkv_weight_np, qkv_bias_np = generate_weights()
+        qkv_weight_tensor = torch.from_numpy(qkv_weight_np.transpose(1, 0).copy()).cuda().half() # need col-major, hence transpose
+        qkv_bias_tensor = torch.from_numpy(qkv_bias_np).cuda().half()
 
         module.set_constant_with_tensor("qkv_weight", qkv_weight_tensor)
         module.set_constant_with_tensor("qkv_bias", qkv_bias_tensor)
@@ -86,6 +91,11 @@ if __name__ == "__main__":
         }
 
         module.run_with_tensors(inputs, outputs, sync=True)
-        print(attention_out_tensor.cpu().numpy())
-        print(present0.cpu().numpy())
+        # print(attention_out_tensor.cpu().numpy())
+        # print(present0.cpu().numpy())
+        return (attention_out_tensor.cpu().numpy(), present0.cpu().numpy())
 
+
+## currently trying memory efficient attention
+if __name__ == "__main__":
+    mem_eff_attention_unidirectional()
