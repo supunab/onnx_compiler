@@ -95,7 +95,49 @@ def mem_eff_attention_unidirectional():
         # print(present0.cpu().numpy())
         return (attention_out_tensor.cpu().numpy(), present0.cpu().numpy())
 
+def run_compiled():
+    # load the compiled AIT generated so and run
+    from aitemplate.compiler import compile_model, Model
+    from aitemplate.frontend import Tensor
+    from aitemplate.testing import detect_target
+    import torch
+    
+    so_path = "./tmp/mem_eff_attn/test.so"
+    mod = Model(so_path)
+    input_np, past0_np = generate_inputs()
+    input_tensor = torch.from_numpy(input_np).cuda().half()
+    past_kv = torch.from_numpy(past0_np).cuda().half()
+
+    # storage for output
+    attention_out_tensor = torch.empty([batch_size, curr_seq_len, hidden_size]).cuda().half()
+    present0 = torch.empty([2, batch_size, num_heads, prev_seq_len + curr_seq_len, hidden_size // num_heads]).cuda().half()
+
+    # linear weights and bias
+    qkv_weight_np, qkv_bias_np = generate_weights()
+    qkv_weight_tensor = torch.from_numpy(qkv_weight_np.transpose(1, 0).copy()).cuda().half() # need col-major, hence transpose
+    qkv_bias_tensor = torch.from_numpy(qkv_bias_np).cuda().half()
+
+    mod.set_constant_with_tensor("qkv_weight", qkv_weight_tensor)
+    mod.set_constant_with_tensor("qkv_bias", qkv_bias_tensor)
+
+    print(mod.get_input_name_to_index_map())
+    print(mod.get_output_name_to_index_map())
+
+    inputs = {
+        "input_hidden_states": input_tensor,
+        "past0": past_kv,
+    }
+    outputs = {
+        "attention_out": attention_out_tensor,
+        "present0": present0
+    }
+
+    mod.run_with_tensors(inputs, outputs, sync=True)
+    print(present0.cpu().numpy())
+    print(attention_out_tensor.cpu().numpy())
+    return (attention_out_tensor.cpu().numpy(), present0.cpu().numpy())
 
 ## currently trying memory efficient attention
 if __name__ == "__main__":
-    mem_eff_attention_unidirectional()
+    # mem_eff_attention_unidirectional()
+    run_compiled()

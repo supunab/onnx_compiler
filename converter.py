@@ -319,7 +319,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
             # TODO: len checking might not be the most accurate thing to do here
             elif node.op_type == "EmbedLayerNormalization" and len(node.input) == 8:
                 # this is not really an optimization, but if this doesn't have position_ids, add a default value
-                seq_len = attributes["seq_len"]
+                seq_len = attributes["seq_len"] if "seq_len" in attributes else attributes["curr_seq_len"]
                 batch_size = attributes["batch_size"]
                 dtype = np.int32
                 data = np.arange(0, seq_len, dtype=dtype).reshape(1, seq_len).repeat(batch_size, axis=0)
@@ -355,6 +355,8 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
             # also need to add cu_length that is required for flash_attention
             # (ideally, cu_length is an input, but just treated as a constant for now)
             elif node.op_type == "Attention":
+                batch_size = attributes["batch_size"]
+                seq_len = attributes["seq_len"] if "seq_len" in attributes else attributes["past_seq_len"] + attributes["curr_seq_len"] # TODO: is this correct?
                 qkv_weight_name = node.input[1]
                 qkv_bias_name = node.input[2]
                 qkv_weight_init = m.name2init[qkv_weight_name]
@@ -451,7 +453,7 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
 
         # remove any already existing source files (otherwise might silently use prev compilation artifacts 
         # even if the current compile fails)
-        full_path = os.path.abspath(output_dir + model_name)
+        full_path = os.path.abspath(os.path.join(output_dir, model_name))
         subprocess.run(f"cd {full_path} && rm * && cd -", shell=True)
 
         compile_model(output, target, output_dir, model_name)

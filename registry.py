@@ -101,53 +101,119 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
     elif op_type == "Attention":
         num_heads = attributes["num_heads"].i
-        seq_len = context.attributes["seq_len"]
+        unidirectional = attributes["unidirectional"].i
         batch_size = context.attributes["batch_size"]
         hidden_dim = context.attributes["hidden_size"]
 
-        # TODO: here, we are giving up on some AIT fusion (e.g., has_residual = True would fuse the add with subsequent project)
-        # note - we don't use the full MHA here. Full MHA has qkv_linear + attention + linear_bias + residual add
-        #        however, we are only using this for qkv_linear + attention
-        use_mem_eff = False
-        use_flash = False
-        unfused_attention = False
-        if "attn_type" in context.attributes:
-            if context.attributes["attn_type"] == "mem_eff":
-                use_mem_eff = True
-            elif context.attributes["attn_type"] == "flash":
-                use_flash = True
-            elif context.attributes["attn_type"] == "unfused":
-                unfused_attention = True
-        
-        mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, num_heads=num_heads, qkv_bias=True,
-                         has_residual=False, use_mem_eff=use_mem_eff, force_use_flash=use_flash, force_unfused_attn=unfused_attention)
-        hidden_states = context.get_tensor(node.input[0])
-        qkv_weight = context.get_tensor(node.input[1])
-        qkv_bias = context.get_tensor(node.input[2])
-        # mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
+        if unidirectional==1:
+            past_seq_len = context.attributes["past_seq_len"]
+            curr_seq_len = context.attributes["curr_seq_len"]
+            # gpt2 style unidirectional attention
+            # TODO: only using mem_eff_attn for now, should try unfused as well 
+            input_hidden_states = context.get_tensor(node.input[0])
+            qkv_weight = context.get_tensor(node.input[1])
+            qkv_bias = context.get_tensor(node.input[2])
+            attn_mask = context.get_tensor(node.input[3]) # TODO: input mask currently ignored, ideally should be converted to packed sequences + cu_lengths
+            past_kv = context.get_tensor(node.input[4])
 
-        # set cu_length (required by flash_attention)
-        cu_length = context.get_tensor("cu_length")
-        mha.cu_length._tensor = cu_length
+            # rest pretty much follows the unit test I wrote in examples/gpt2/testing/ait_testAttention.py
 
-        # update the params to use tensor we created        
-        mha.qkv.weight._tensor = qkv_weight
-        mha.qkv.bias._tensor = qkv_bias
+            past_keys = ops.dynamic_slice()(past_kv, start_indices=[0, 0, 0, 0, 0], 
+                                                     end_indices=[1, batch_size, num_heads, past_seq_len, hidden_dim // num_heads])
+            past_values = ops.dynamic_slice()(past_kv, start_indices=[1, 0, 0, 0, 0], 
+                                                     end_indices=[2, batch_size, num_heads, past_seq_len, hidden_dim // num_heads])
+            # reshape to drop the leading 1
+            past_keys = ops.reshape()(past_keys, [batch_size, num_heads, past_seq_len, hidden_dim // num_heads])
+            past_values = ops.reshape()(past_values, [batch_size, num_heads, past_seq_len, hidden_dim // num_heads])
 
-        intermediate = mha.qkv_proj(hidden_states)
-        output_4d = mha.attention(intermediate)
-        # in some cases (e.g., is mha.use_flash = true), the output shape is 3d for some reason (probably a missing reshape in AIT)
-        # that is, output shape = [batch*seq_len, num_heads, hidden / num_heads]
-        # let's reshape to be consistent
-        if output_4d._rank() == 3:
-            output_4d = ops.reshape()(output_4d, [batch_size, seq_len, output_4d.shape()[-2], output_4d.shape()[-1]])
-        assert output_4d._rank() == 4
-        # output is 4d with (batch_size, seq_len, num_heads, hidden / num_heads)
-        # convert this to 3d (as the onnx attention op) so that the shape is (batch_size, seq_len, hidden)
-        output = ops.reshape()(output_4d, [output_4d.shape()[0], output_4d.shape()[1], -1])
-        output_name = clean_name(node.output[0])
-        output._attrs["name"] = output_name
-        context.add_tensor(output)
+            # init qkv projection layer ( with fused permute)
+            qkv = nn.Linear(
+                    hidden_dim,
+                    3 * hidden_dim,
+                    specialization="permute",
+                    shape=(curr_seq_len, 3, num_heads),
+                )
+            qkv.weight._tensor = qkv_weight
+            qkv.bias._tensor = qkv_bias
+
+            input_hidden_states_reshaped = ops.reshape()(input_hidden_states, [-1, hidden_dim])
+            qkv_out = qkv(input_hidden_states_reshaped) # 3, bs, num_heads, sl, hidden//num_heads (figured by looking at the code)
+
+            # q, k, v for current input
+            (q, k, v) = ops.split()(qkv_out, 1, dim=0) # each having shape: 1, bs, num_heads, sl, hidden // num_heads
+            k_reshaped = ops.reshape()(k, [batch_size, num_heads, curr_seq_len, hidden_dim // num_heads])
+            q_reshaped = ops.reshape()(q, [batch_size, num_heads, curr_seq_len, hidden_dim // num_heads])
+            v_reshaped = ops.reshape()(v, [batch_size, num_heads, curr_seq_len, hidden_dim // num_heads])
+
+            # concatanate old keys to k
+            full_k = ops.concatenate()([past_keys, k_reshaped], dim=2)
+            full_v = ops.concatenate()([past_values, v_reshaped], dim=2)
+
+            # TODO: causal shuld be True for unidirectional attention. However, the current implementation considers current sequence to start from position 0 if that's the case and
+            #       doesn't use "past" kv values to compute the attention. Therefore, as a workaround I'm using causal=True (only works for seq_len=1)
+            #       causal=True works without any issue for cases where we don't have past KV and all QKV comes fresh (i.e. seq_len_kv = seq_len_q)
+            assert curr_seq_len == 1, f"only suppor curr_seq_len=1 (got {curr_seq_len})"
+            attention_out = ops.mem_eff_attention(causal=False)(q_reshaped, full_k, full_v) # bs, sl, num_heads, hidden // num_heads
+            attention_out_reshaped = ops.reshape()(attention_out, [batch_size, curr_seq_len, hidden_dim])
+
+            attention_out_reshaped._attrs["name"] = clean_name(node.output[0])
+            context.add_tensor(attention_out_reshaped)
+
+            # product present_kv (concatanate past keys and past values with new key and value)
+            full_k_reshaped = ops.reshape()(full_k, [1, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads])
+            full_v_reshaped = ops.reshape()(full_v, [1, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads])
+            present_kv = ops.concatenate()([full_k_reshaped, full_v_reshaped], dim=0)
+            
+            present_kv._attrs["name"] = clean_name(node.output[1])
+            context.add_tensor(present_kv)
+
+        else:
+            # bert style bidirectional attention
+            # TODO: here, we are giving up on some AIT fusion (e.g., has_residual = True would fuse the add with subsequent project)
+            # note - we don't use the full MHA here. Full MHA has qkv_linear + attention + linear_bias + residual add
+            #        however, we are only using this for qkv_linear + attention
+            seq_len = context.attributes["seq_len"]
+
+            use_mem_eff = False
+            use_flash = False
+            unfused_attention = False
+            if "attn_type" in context.attributes:
+                if context.attributes["attn_type"] == "mem_eff":
+                    use_mem_eff = True
+                elif context.attributes["attn_type"] == "flash":
+                    use_flash = True
+                elif context.attributes["attn_type"] == "unfused":
+                    unfused_attention = True
+            
+            mha = nn.MultiheadAttention(dim=hidden_dim, batch_size=batch_size, seq_len=seq_len, num_heads=num_heads, qkv_bias=True,
+                            has_residual=False, use_mem_eff=use_mem_eff, force_use_flash=use_flash, force_unfused_attn=unfused_attention)
+            hidden_states = context.get_tensor(node.input[0])
+            qkv_weight = context.get_tensor(node.input[1])
+            qkv_bias = context.get_tensor(node.input[2])
+            # mask = context.get_tensor(node.input[3]) # TODO: how exactly should we use mask? currently ignored
+
+            # set cu_length (required by flash_attention)
+            cu_length = context.get_tensor("cu_length")
+            mha.cu_length._tensor = cu_length
+
+            # update the params to use tensor we created        
+            mha.qkv.weight._tensor = qkv_weight
+            mha.qkv.bias._tensor = qkv_bias
+
+            intermediate = mha.qkv_proj(hidden_states)
+            output_4d = mha.attention(intermediate)
+            # in some cases (e.g., is mha.use_flash = true), the output shape is 3d for some reason (probably a missing reshape in AIT)
+            # that is, output shape = [batch*seq_len, num_heads, hidden / num_heads]
+            # let's reshape to be consistent
+            if output_4d._rank() == 3:
+                output_4d = ops.reshape()(output_4d, [batch_size, seq_len, output_4d.shape()[-2], output_4d.shape()[-1]])
+            assert output_4d._rank() == 4
+            # output is 4d with (batch_size, seq_len, num_heads, hidden / num_heads)
+            # convert this to 3d (as the onnx attention op) so that the shape is (batch_size, seq_len, hidden)
+            output = ops.reshape()(output_4d, [output_4d.shape()[0], output_4d.shape()[1], -1])
+            output_name = clean_name(node.output[0])
+            output._attrs["name"] = output_name
+            context.add_tensor(output)
 
     elif op_type == "gemm_rcr_bias_add":
         matmul_A = context.get_tensor(node.input[0])
