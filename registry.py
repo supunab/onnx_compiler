@@ -101,7 +101,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
     elif op_type == "Attention":
         num_heads = attributes["num_heads"].i
-        unidirectional = attributes["unidirectional"].i
+        unidirectional = attributes["unidirectional"].i if "unidirectional" in attributes else 0
         batch_size = context.attributes["batch_size"]
         hidden_dim = context.attributes["hidden_size"]
 
@@ -255,8 +255,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         ln_weight = context.get_tensor(node.input[5])
         ln_bias = context.get_tensor(node.input[6])
         # attention_mask = context.get_tensor(node.input[7]) # TODO: attention mask is not used in AIT bert_embedding?
-        # pos_ids = context.get_tensor(node.input[8])
-        pos_ids = context.get_tensor(node.input[7])
+        pos_ids = context.get_tensor(node.input[8])
 
         epsilon = attributes["epsilon"].f
 

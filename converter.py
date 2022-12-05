@@ -11,7 +11,7 @@ from aitemplate.compiler import compile_model
 from aitemplate.testing import detect_target
 from converter_context import ConverterContext, ModelWraper
 from registry import process_node
-from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx, map_onnx_dtype_to_numpy
+from utils import clean_name, map_type, to_attribute_dict, map_np_type_to_onnx, map_onnx_dtype_to_numpy, add_input_to_node
 import numpy as np
 from onnx import helper, numpy_helper
 import logging
@@ -84,20 +84,22 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
     data = data.transpose(perm)
     constant.raw_data = data.tobytes()
 
+
 def remove_attention_mask_hack(model: onnx.ModelProto):
     for node in model.graph.node:
         if node.op_type == "EmbedLayerNormalization":
-            # remove the 8th (last) input
-            name = node.input[7]
-            node.input.remove(name)
-            # remove from graph inputs
-            to_remove = None
-            for input in model.graph.input:
-                if name == input.name:
-                    to_remove = input
-                    break
-            model.graph.input.remove(to_remove)
-            break
+            # TODO: ignoring attention mask input for now
+            # remove if attention mask (input[7]) if it exists
+            if len(node.input) > 7 and node.input[7] != "":
+                name = node.input[7]
+                # remove from graph inputs
+                to_remove = None
+                for input in model.graph.input:
+                    if name == input.name:
+                        to_remove = input
+                        break
+                model.graph.input.remove(to_remove)
+                node.input[7] = "" # reset node input to none
 
 
 def clean_name_graph(model: onnx.ModelProto):
@@ -125,7 +127,6 @@ def clean_name_graph(model: onnx.ModelProto):
         for i in range(len(node.input)):
             if node.input[i] != "":
                 node.input[i] = clean_name(node.input[i])
-    
 
 
 """
@@ -319,31 +320,46 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 to_remove.append(node)
                 changed = True
 
-            # TODO: len checking might not be the most accurate thing to do here
-            elif node.op_type == "EmbedLayerNormalization" and len(node.input) == 8:
-                # this is not really an optimization, but if this doesn't have position_ids, add a default value
+            # add pos_ids, token_type_emd, token_type_ids if they are not present in the graph
+            elif node.op_type == "EmbedLayerNormalization":
                 seq_len = attributes["seq_len"] if "seq_len" in attributes else attributes["curr_seq_len"]
                 batch_size = attributes["batch_size"]
-                dtype = np.int32
-                data = np.arange(0, seq_len, dtype=dtype).reshape(1, seq_len).repeat(batch_size, axis=0)
-                init_node_name = "__default_pos_ids"
-                # check if this already exists (e.g., used for a different node)
-                found = False
-                for init in graph.initializer:
-                    if init.name == init_node_name:
-                        found = True
-                        break
-                if not found:
-                    init_node = helper.make_tensor(
-                        name = init_node_name,
-                        data_type=map_np_type_to_onnx(dtype),
-                        dims=[batch_size, seq_len],
-                        vals=data.tobytes(), raw=True)
-                    # add this to inits
-                    graph.initializer.append(init_node)
+                # add default position_ids if it doesn't exists
+                if len(node.input) < 9 or node.input[8] == "":
+                    dtype = np.int32
+                    data = np.arange(0, seq_len, dtype=dtype).reshape(1, seq_len).repeat(batch_size, axis=0)
+                    init_node_name = "__default_pos_ids"
+                    # check if this already exists (e.g., used for a different node)
+                    found = False
+                    for init in graph.initializer:
+                        if init.name == init_node_name:
+                            found = True
+                            break
+                    if not found:
+                        init_node = numpy_helper.from_array(data)
+                        init_node.name = init_node_name
+                        graph.initializer.append(init_node)
+                    
+                    # augment the EmbedLayerNormalization node to have this as input (this should be input 8)
+                    add_input_to_node(node, init_node_name, 8)
                 
-                # augment the EmbedLayerNormalization node to have this as input
-                node.input.append(init_node_name)
+                # add token_type_emb and token_type_ids default values as inits if not present in graph
+                if node.input[1] == "" and node.input[4] == "":
+                    # TODO: ideally we should have a proper backend kernel that ignores token_type
+                    #       but we are simply reusing bert_embeddings for convenience
+                    #       (embedding op doesn't take much time anyways)
+                    hidden_size = attributes["hidden_size"] # TODO: should ideally be embedding size
+                    emb_weight_data = np.zeros([1, hidden_size], dtype=np.float16)
+                    token_type_data = np.zeros([batch_size, seq_len], dtype=np.float16)
+
+                    emb_weight_init = numpy_helper.from_array(emb_weight_data)
+                    emb_weight_init.name = "__default_tok_emb_weight"
+                    token_type_init = numpy_helper.from_array(token_type_data)
+                    token_type_init.name = "__default_tok_type_ids"
+
+                    # add to node
+                    add_input_to_node(node, token_type_init.name, 1)
+                    add_input_to_node(node, emb_weight_init.name, 4)
 
             # convert Constant into initializers
             elif node.op_type == "Constant":

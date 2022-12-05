@@ -86,3 +86,11 @@ def to_attribute_dict(attributes: list[onnx.AttributeProto]) -> dict:
     for attr in attributes:
         d[attr.name] = attr
     return d
+
+def add_input_to_node(node, init_name, pos: int):
+    if len(node.input) > pos:
+        node.input[pos] = init_name
+    else:
+        for _ in range(len(node.input), pos):
+            node.input.append("")
+        node.input.append(init_name)
