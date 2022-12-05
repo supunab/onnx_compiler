@@ -120,10 +120,13 @@ def clean_name_graph(model: onnx.ModelProto):
     # clean node inputs and outputs
     for node in graph.node:
         for i in range(len(node.output)):
-            node.output[i] = clean_name(node.output[i])
+            if node.output[i] != "":
+                node.output[i] = clean_name(node.output[i])
         for i in range(len(node.input)):
-            node.input[i] = clean_name(node.input[i])
+            if node.input[i] != "":
+                node.input[i] = clean_name(node.input[i])
     
+
 
 """
 (in-place) graph level transformations. Mostly for changing nodes (e.g., Matmul --> GEMM) and fusing (GEMM + fast_gelu) so that
@@ -389,8 +392,9 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
             ## TODO: perhaps we can do other types of fusions here as well (e.g., for the ones that doesn't get fused automatically from AIT)
         
         for node in to_remove:
-            graph.node.remove(node)
-            logging.debug(f"removing {node.name}")
+            if node in graph.node:
+                graph.node.remove(node)
+                logging.debug(f"removing {node.name}")
 
         # need to topologicaly sort since newly added nodes are just prepended
         if changed:

@@ -50,16 +50,15 @@ class ModelWraper:
             consumers[node.name] = {}
             output_names = list(node.output)
             outputs[node.name] = output_names
-            # if node.name == "BiasGelu_Approximation_0":
-            #     print(output_names)
             for output in output_names:
                 producers[output] = node
                 consumers[node.name][output] = []
             
             input_names = list(node.input)
             for input in input_names:
-                producer = producers[input]
-                consumers[producer.name][input].append(node)
+                if input!="": # inputs are positional so there can be empty inputs in the middle
+                    producer = producers[input]
+                    consumers[producer.name][input].append(node)
         return consumers, outputs, producers
             
 
