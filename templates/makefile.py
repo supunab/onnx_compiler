@@ -24,7 +24,7 @@ obj_files = {{obj_files}}
 all: test.so
 
 test.so: $(obj_files)
-	$(CC) -shared $(fPIC_flag) $(CFLAGS) -o $@ $(obj_files)
+	$(CC) -shared $(fPIC_flag) $(CFLAGS) -o $@ $(obj_files) {{constants_file}}
 
 clean:
 	rm -f $(obj_files) test.so

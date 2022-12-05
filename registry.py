@@ -113,7 +113,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
             input_hidden_states = context.get_tensor(node.input[0])
             qkv_weight = context.get_tensor(node.input[1])
             qkv_bias = context.get_tensor(node.input[2])
-            attn_mask = context.get_tensor(node.input[3]) # TODO: input mask currently ignored, ideally should be converted to packed sequences + cu_lengths
+            # attn_mask = context.get_tensor(node.input[3]) # TODO: input mask currently ignored (removed in converter.py), ideally should be converted to packed sequences + cu_lengths
             past_kv = context.get_tensor(node.input[4])
 
             # rest pretty much follows the unit test I wrote in examples/gpt2/testing/ait_testAttention.py

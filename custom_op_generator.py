@@ -28,12 +28,19 @@ def generate_makefile(folder: str, onnx_header_path: str, ait_path: str, arch: s
             cu_files.append(f[:-3])
 
     obj_files = " ".join(list(map(lambda f: f + ".obj", cu_files)))
+
+    # check whether constants.obj exists (if so we need to add that to linking command in makefile)
+    if os.path.exists(os.path.join(folder, "constants.obj")):
+        constants_file = "constants.obj"
+    else:
+        constants_file = ""
     
     with open(os.path.join(folder, "Makefile"), "w") as f:
         f.write(
-            MAKEFILE_TEMPLATE.render(onnx_header_path=onnx_header_path, ait_path=ait_path, obj_files=obj_files, arch=arch)
+            MAKEFILE_TEMPLATE.render(onnx_header_path=onnx_header_path, ait_path=ait_path, obj_files=obj_files, arch=arch, constants_file=constants_file)
         )
     
+
 # generate the .cu and .h file required for the custom op
 def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True, onnx_header_path: str = "/work/onnxruntime/include/", ait_path: str = "/work/AITemplate/"):
     """

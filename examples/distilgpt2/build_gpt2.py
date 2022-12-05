@@ -4,7 +4,7 @@ import sys
 import os
 
 sys.path.insert(1, os.path.abspath("./../../"))
-from converter import transform_graph, compile
+from converter import transform_graph, compile, remove_attention_mask_hack
 from custom_op_generator import generate, convert_graph
 import logging
 import click
@@ -40,6 +40,7 @@ def build_gpt2(save_transform: bool, do_compile: bool, visualize_ait_graph: bool
 
     if save_transform:
         transform_graph(model, attributes=attributes)
+        remove_attention_mask_hack(model)
         onnx.save_model(model, "test.onnx")
 
     if do_compile:
@@ -67,7 +68,7 @@ def build_gpt2(save_transform: bool, do_compile: bool, visualize_ait_graph: bool
                 graph = compiler.transform.optimize_graph(graph, "./tmp")
             return graph
         graph = apply_optimizations(outputs)
-        plot_graph(graph, file_path="ait_bert_model.html", network_name="ait_bert")
+        plot_graph(graph, file_path="./ait_gpt2_model.html")
 
 
 @click.command()

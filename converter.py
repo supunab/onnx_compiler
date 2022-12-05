@@ -86,6 +86,7 @@ def convert_row_major_constant_to_col_major(constant: onnx.TensorProto) -> None:
 
 
 def remove_attention_mask_hack(model: onnx.ModelProto):
+    removed_inputs = []
     for node in model.graph.node:
         if node.op_type == "EmbedLayerNormalization":
             # TODO: ignoring attention mask input for now
@@ -100,6 +101,25 @@ def remove_attention_mask_hack(model: onnx.ModelProto):
                         break
                 model.graph.input.remove(to_remove)
                 node.input[7] = "" # reset node input to none
+
+        # remove this from Attention op as well
+        if node.op_type == "Attention":
+            # input[3] is the mask
+            if node.input[3] != "":
+                # check if this is an input or an input we removed
+                if node.input[3] in removed_inputs:
+                    node.input[3] = ""
+                else:
+                    to_remove = None
+                    for graph_input in model.graph.input:
+                        if node.input[3] == graph_input.name:
+                            to_remove = graph_input
+                            break
+                    else:
+                        continue
+                    removed_inputs.append(to_remove.name)
+                    model.graph.input.remove(to_remove)
+                    node.input[3] = ""
 
 
 def clean_name_graph(model: onnx.ModelProto):
