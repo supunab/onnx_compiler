@@ -12,6 +12,15 @@ from common import *
 
 def build_gpt2(save_transform: bool, do_compile: bool, visualize_ait_graph: bool, debug_logs: bool, model_path: str, ait_build_folder: str, ait_path: str, onnx_path: str,
                 batch_size: int, hidden_size: int, past_seq_len: int, curr_seq_len: int, vocab_size: int, attn_type: str):
+
+    if debug_logs:
+        logging.Logger.setLevel(logging.getLogger(), logging.DEBUG)
+
+    if (not do_compile) and (not save_transform) and (not visualize_ait_graph):
+        logging.info("You must specify either --save_transform (to save the transformed graph for " + \
+                        " debug purposes) or --do_compile (to compile a custom op for the model)" + \
+                        "--visualize_ait_graph (to visualize the optimized AIT graph)")
+
     assert attn_type=="mem_eff", "Only mem_eff attention is supported"
 
     # dim names should match the names in the onnx graph
@@ -26,9 +35,39 @@ def build_gpt2(save_transform: bool, do_compile: bool, visualize_ait_graph: bool
 
     model = onnx.load_model(model_path)
 
+    converted_model_path = "distilgpt2_converted.onnx"
+    model_name = "distilgpt2"
+
     if save_transform:
         transform_graph(model, attributes=attributes)
         onnx.save_model(model, "test.onnx")
+
+    if do_compile:
+        context = compile(model, output_dir=ait_build_folder, model_name=model_name, attributes=attributes)
+        generate(context, os.path.join(ait_build_folder, model_name), ait_path=ait_path, onnx_header_path=onnx_path)
+        convert_graph(model.graph, context, converted_model_path)
+
+    if visualize_ait_graph:
+        outputs = compile(model, output_dir=ait_build_folder, model_name=model_name, attributes=attributes, return_out=True)
+        # pick the last output?
+        # Y = outputs[-1]
+        from aitemplate import compiler
+        from aitemplate.testing import detect_target
+        from aitemplate.utils.visualization import plot_graph
+        def apply_optimizations(tensors):
+            target = detect_target()
+            # first, convert output tensors to graph
+            with target:
+                graph = compiler.transform.toposort(tensors)
+                # second, provide names to the graph
+                compiler.transform.name_graph(graph)
+                compiler.transform.mark_param_tensor(graph)
+                compiler.transform.mark_special_views(graph)
+                # we can apply optimizations to the graph, or test single optimization pass on the graph
+                graph = compiler.transform.optimize_graph(graph, "./tmp")
+            return graph
+        graph = apply_optimizations(outputs)
+        plot_graph(graph, file_path="ait_bert_model.html", network_name="ait_bert")
 
 
 @click.command()

@@ -320,6 +320,7 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                 to_remove.append(node)
                 changed = True
 
+
             # add pos_ids, token_type_emd, token_type_ids if they are not present in the graph
             elif node.op_type == "EmbedLayerNormalization":
                 seq_len = attributes["seq_len"] if "seq_len" in attributes else attributes["curr_seq_len"]
@@ -350,12 +351,16 @@ def transform_graph(model: onnx.ModelProto, attributes: dict) -> None:
                     #       (embedding op doesn't take much time anyways)
                     hidden_size = attributes["hidden_size"] # TODO: should ideally be embedding size
                     emb_weight_data = np.zeros([1, hidden_size], dtype=np.float16)
-                    token_type_data = np.zeros([batch_size, seq_len], dtype=np.float16)
+                    token_type_data = np.zeros([batch_size, seq_len], dtype=np.int32)
 
                     emb_weight_init = numpy_helper.from_array(emb_weight_data)
                     emb_weight_init.name = "__default_tok_emb_weight"
                     token_type_init = numpy_helper.from_array(token_type_data)
                     token_type_init.name = "__default_tok_type_ids"
+
+                    # add to inits
+                    graph.initializer.append(token_type_init)
+                    graph.initializer.append(emb_weight_init)
 
                     # add to node
                     add_input_to_node(node, token_type_init.name, 1)

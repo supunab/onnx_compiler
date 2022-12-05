@@ -7,7 +7,7 @@ import time
 import click
 
 # shared_lib = "/work/supun/onnx_compiler/test/bert/tmp/bert/test.so"
-shared_lib = "/work/onnx_compiler/bert/test.so"
+shared_lib = "/work/onnx_compiler/examples/bert/tmp/bert/test.so"
 model_path = "bert_converted.onnx"
 original_model_path = "/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx"
 # original_model_path = "/work/supun/models/bert/bert_base_cased_3_fp16_gpu.onnx"

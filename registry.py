@@ -58,7 +58,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         output._attrs["name"] = output_name
         context.add_tensor(output)
 
-    elif op_type == "Matmul":
+    elif op_type == "MatMul":
         # TODO: make it more generalize
         a = context.get_tensor(node.input[0])
         b = context.get_tensor(node.input[1])
@@ -69,7 +69,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
             # all MatMul inputs are row-major because there's no transA, transB attributes
             output = ops.gemm_rrr()(a_in, b)
             # reshape the output
-            output = output if a._rank() == 2 else ops.reshape()(a, a.shape()[:-1] + [b.shape()[-1]])
+            output = output if a._rank() == 2 else ops.reshape()(output, a.shape()[:-1] + [b.shape()[-1]])
             output_name = clean_name(node.output[0])
             output._attrs["name"] = output_name
             context.add_tensor(output)
@@ -107,7 +107,7 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
 
         if unidirectional==1:
             past_seq_len = context.attributes["past_seq_len"]
-            curr_seq_len = context.attributes["curr_seq_len"]
+            curr_seq_len = context.attributes["seq_len"]
             # gpt2 style unidirectional attention
             # TODO: only using mem_eff_attn for now, should try unfused as well 
             input_hidden_states = context.get_tensor(node.input[0])
@@ -260,20 +260,47 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         epsilon = attributes["epsilon"].f
 
         # computes: embedding = layernorm(word_embedding + token_type_embedding + position_embedding)
-        output = ops.bert_embeddings()(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            position_ids=pos_ids,
-            word_embeddings=word_embedding_weight,
-            token_type_embeddings=token_type_embedding_weight,
-            position_embeddings=pos_embedding_weight,
-            gamma=ln_weight,
-            beta=ln_bias,
-            eps=epsilon
-        )
-        output_name = clean_name(node.output[0])
-        output._attrs["name"] = output_name
-        context.add_tensor(output)
+        if len(node.output)>2:
+            # output[2] is embedding sum before layer norm, for that we use a slighly modified version of original
+            # AIT bert_embeddings
+            output, emb_output = ops.bert_embeddings_with_emb()(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=pos_ids,
+                word_embeddings=word_embedding_weight,
+                token_type_embeddings=token_type_embedding_weight,
+                position_embeddings=pos_embedding_weight,
+                gamma=ln_weight,
+                beta=ln_bias,
+                eps=epsilon
+            )
+            # emb after layer norm output
+            output_name = clean_name(node.output[0])
+            output._attrs["name"] = output_name
+            context.add_tensor(output)
+
+            # TODO: currently ignores mask_index output (we have a preprocessing step that removes any use of this output)
+
+            # emb before layer norm output
+            emb_output_name = clean_name(node.output[2])
+            emb_output._attrs["name"] = emb_output_name
+            context.add_tensor(emb_output)
+            
+        else:
+            output = ops.bert_embeddings()(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=pos_ids,
+                word_embeddings=word_embedding_weight,
+                token_type_embeddings=token_type_embedding_weight,
+                position_embeddings=pos_embedding_weight,
+                gamma=ln_weight,
+                beta=ln_bias,
+                eps=epsilon
+            )
+            output_name = clean_name(node.output[0])
+            output._attrs["name"] = output_name
+            context.add_tensor(output)
 
     elif op_type == "Gather":
         """
