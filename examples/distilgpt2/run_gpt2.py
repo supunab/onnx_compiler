@@ -6,80 +6,87 @@ import torch.utils.benchmark as benchmark
 import time
 import click
 
-# shared_lib = "/work/supun/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
 shared_lib = "/work/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
+# shared_lib = "/work/supun/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
 model_path = "distilgpt2_converted.onnx"
 original_model_path = "/work/models/distilgpt2/distilgpt2_fp16.onnx"
-# original_model_path = "/work/supun/models/distilgpt2/distilgpt2_fp16.onnx"
+#original_model_path = "/work/supun/models/distilgpt2/distilgpt2_fp16.onnx"
 
 
-# def run_ait(bench: bool, config: dict):
-#     from aitemplate.compiler import Model
-#     import onnx
-#     from onnx import numpy_helper
+def run_ait(bench: bool, config: dict):
+    from aitemplate.compiler import Model
+    import onnx
+    from onnx import numpy_helper
 
-#     batch_size = config["batch_size"]
-#     hidden_size = config["hidden_size"]
-#     past_seq_len = config["past_seq_len"]
-#     curr_seq_len = config["seq_len"]
-#     logging.info("Running generated AIT code directly....")
+    batch_size = config["batch_size"]
+    hidden_size = config["hidden_size"]
+    past_seq_len = config["past_seq_len"]
+    curr_seq_len = config["seq_len"]
+    logging.info("Running generated AIT code directly....")
 
-#     # load the model
-#     model = onnx.load_model(model_path)
-#     graph = model.graph
+    # load the model
+    model = onnx.load_model(model_path)
+    graph = model.graph
 
-#     # load the compiled .so
-#     mod = Model(shared_lib)
+    # load the compiled .so
+    mod = Model(shared_lib)
 
-#     # set constants
-#     for init in graph.initializer:
-#         name = init.name
-#         np_data = numpy_helper.to_array(init)
-#         ait_data = mod.numpy_to_ait_data(np_data)
-#         mod.set_constant(name, ait_data)
+    # set constants
+    for init in graph.initializer:
+        name = init.name
+        np_data = numpy_helper.to_array(init)
+        ait_data = mod.numpy_to_ait_data(np_data)
+        mod.set_constant(name, ait_data)
     
+    # setup inputs
+    input_dtype = np.int32
+    input_ids_np, position_ids_np, attention_mask_np, past_list = generate_inputs(input_dtype, config)
 
-#     # setup inputs
-#     input_dtype = np.int32
-#     input_ids_np, attention_mask_np, token_type_np = generate_inputs(input_dtype, config)
+    input_ids_ait = mod.numpy_to_ait_data(input_ids_np)
+    position_ids_ait = mod.numpy_to_ait_data(position_ids_np)
 
-#     input_ids_ait = mod.numpy_to_ait_data(input_ids_np)
-#     token_type_ait = mod.numpy_to_ait_data(token_type_np)
+    inputs = {
+        "input_ids": input_ids_ait,
+        "position_ids": position_ids_ait
+    }
+    for i in range(num_layers):
+        inputs[f"past_{i}"] = mod.numpy_to_ait_data(past_list[i])
 
-#     inputs = {
-#         "input_ids": input_ids_ait,
-#         "token_type_ids": token_type_ait
-#     }
+    # outputs
+    output_logits = mod.numpy_to_ait_data(np.empty([batch_size, curr_seq_len, hidden_size], dtype=np.float16))
+    output_present_list = []
+    for i in range(num_layers):
+        output_present_list.append(mod.numpy_to_ait_data(np.empty([2, batch_size, num_heads_default, curr_seq_len, hidden_size // num_heads_default], dtype=np.float16)))
 
-#     # outputs
-#     out1_ait = mod.numpy_to_ait_data(np.empty([batch_size, seq_len, hidden_size], dtype=np.float16))
-#     out2_ait = mod.numpy_to_ait_data(np.empty([batch_size, hidden_size], dtype=np.float16))
+    outputs = {
+        "logits": output_logits
+    }
+    for i in range(num_layers):
+        outputs[f"present_{i}"] = output_present_list[i]
 
-#     outputs = {
-#         "graph_output_cast_0": out1_ait,
-#         "graph_output_cast_1": out2_ait
-#     }
-
-#     iter_time = 0
-#     if bench:
-#         # warm ups
-#         for i in range(warm_ups):
-#             mod.run(inputs, outputs, sync=True)
+    iter_time = 0
+    if bench:
+        # warm ups
+        for i in range(warm_ups):
+            mod.run(inputs, outputs, sync=True)
         
-#         start = time.time()
-#         for i in range(repeats):
-#             mod.run(inputs, outputs, sync=True)
-#         end = time.time()
-#         iter_time = (end - start) / repeats * 1000
-#         logging.info(f"Elapsed Time: {iter_time}ms")
-#     else:
-#         start = time.time()
-#         mod.run(inputs, outputs, sync=True)
-#         end = time.time()
-#         iter_time = (end - start) * 1000
-#         logging.info(f"Elapsed Time: {iter_time}ms")
+        start = time.time()
+        for i in range(repeats):
+            mod.run(inputs, outputs, sync=True)
+        end = time.time()
+        iter_time = (end - start) / repeats * 1000
+        logging.info(f"Elapsed Time: {iter_time}ms")
+    else:
+        start = time.time()
+        mod.run(inputs, outputs, sync=True)
+        end = time.time()
+        iter_time = (end - start) * 1000
+        logging.info(f"Elapsed Time: {iter_time}ms")
 
-#     return (mod.ait_data_to_numpy(out1_ait), mod.ait_data_to_numpy(out2_ait), iter_time) 
+    output_logits_np = mod.ait_data_to_numpy(output_logits)
+    output_presents_np = list(map(lambda x: mod.ait_data_to_numpy(x), output_present_list))
+
+    return (output_logits_np, output_presents_np, iter_time) 
 
 
 def run_onnx(custom_op: bool, bench: bool, config: dict):
@@ -194,9 +201,9 @@ def run_gpt2(run_original: bool, run_custom: bool, run_ait_generated: bool, benc
         (_, _, iter_time) = run_onnx(custom_op=False, bench=benchmark, config=config)
         return iter_time
 
-    # elif run_ait_generated:
-    #     (_, _, iter_time) = run_ait(bench=benchmark, config=config)
-    #     return iter_time
+    elif run_ait_generated:
+        (_, _, iter_time) = run_ait(bench=benchmark, config=config)
+        return iter_time
 
     elif compare:
         (custom_logits_out, custom_present_list, _) = run_onnx(custom_op=True, bench=benchmark, config=config)
