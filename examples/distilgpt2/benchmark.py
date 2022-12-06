@@ -57,8 +57,8 @@ if __name__ == "__main__":
                 # run AIT custom op
                 case_name = f"onnx_ait_custom_op_bert_bs_{bs}_hs{hs}_sl{sl}"
                 logging.info(f"Running {case_name}")
-                # # build custom op
-                # subprocess.run(f"python3 build_gpt2.py --do_compile -m {original_model_path} -ait {ait_build_folder} --ait_path {ait_path} --onnx_path {onnx_path} --batch_size {bs} --hidden_size {hs} --past_seq_len {sl} --vocab_size {vocab_size_default}", shell=True)
+                # build custom op
+                subprocess.run(f"python3 build_gpt2.py --do_compile -m {original_model_path} -ait {ait_build_folder} --ait_path {ait_path} --onnx_path {onnx_path} --batch_size {bs} --hidden_size {hs} --past_seq_len {sl} --vocab_size {vocab_size_default}", shell=True)
                 
                 # run
                 out = subprocess.run(f"python3 run_gpt2.py --run_custom --benchmark --batch_size {bs} --hidden_size {hs} --past_seq_len {sl} --vocab_size {vocab_size_default}", shell=True, capture_output=True)
@@ -68,11 +68,11 @@ if __name__ == "__main__":
                 write_result(f"ORT (AIT Custom op: ),{bs},{hs},{sl}", iter_time, fname)
 
                 # run AIT directly
-                # case_name = f"ait_bert_bs_{bs}_hs{hs}_sl{sl}"
-                # logging.info(f"Running {case_name}")
-                # out = subprocess.run(f"python3 run_gpt2.py --run_ait_generated --benchmark --batch_size {bs} --hidden_size {hs} --past_seq_len {sl} --vocab_size {vocab_size_default}", shell=True, capture_output=True)
-                # append_log(log_file, out.stderr.decode())
-                # iter_time = parse_time(out.stderr.decode())
-                # data[case_name] = iter_time
-                # write_result(f"AIT,{bs},{hs},{sl}", iter_time, fname)
+                case_name = f"ait_bert_bs_{bs}_hs{hs}_sl{sl}"
+                logging.info(f"Running {case_name}")
+                out = subprocess.run(f"python3 run_gpt2.py --run_ait_generated --benchmark --batch_size {bs} --hidden_size {hs} --past_seq_len {sl} --vocab_size {vocab_size_default}", shell=True, capture_output=True)
+                append_log(log_file, out.stderr.decode())
+                iter_time = parse_time(out.stderr.decode())
+                data[case_name] = iter_time
+                write_result(f"AIT,{bs},{hs},{sl}", iter_time, fname)
 
