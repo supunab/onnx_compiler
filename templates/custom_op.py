@@ -79,8 +79,11 @@ struct OrtTensorDimensions : std::vector<int64_t> {
 };
 
 struct AITKernel {
+  AITemplateModelHandle handle;
+
   AITKernel(const OrtApi& api)
       : ort_(api) {
+        AITemplateModelContainerCreate(&handle, 1);
   }
 
   void Compute(OrtKernelContext* context) {
@@ -98,9 +101,6 @@ struct AITKernel {
     /* Calling AITemplate generated code */
     // init AITData objects from data
     {{init_ait_data_body}}
-
-    AITemplateModelHandle handle;
-    AITemplateModelContainerCreate(&handle, 1);
 
     {{set_ait_constants_body}}
     {{set_ait_inputs_body}}

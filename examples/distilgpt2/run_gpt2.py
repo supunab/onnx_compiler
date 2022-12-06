@@ -210,7 +210,7 @@ def run_gpt2(run_original: bool, run_custom: bool, run_ait_generated: bool, benc
         (ort_logits_out, ort_present_list, _) = run_onnx(custom_op=False, bench=benchmark, config=config)
         # (out1_ait, out2_ait) = run_ait()  Note - manually verified the output is the same
 
-        if np.allclose(custom_logits_out, ort_logits_out, atol=0.1):
+        if np.allclose(custom_logits_out, ort_logits_out, atol=0.2):
             logging.info("Output logits matched, success!")
         else:
             logging.info("Output logits doesn't match, time to debug!")
