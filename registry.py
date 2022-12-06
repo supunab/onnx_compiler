@@ -162,7 +162,11 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
             # product present_kv (concatanate past keys and past values with new key and value)
             full_k_reshaped = ops.reshape()(full_k, [1, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads])
             full_v_reshaped = ops.reshape()(full_v, [1, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads])
-            present_kv = ops.concatenate()([full_k_reshaped, full_v_reshaped], dim=0)
+            
+            # TODO(HACK!!): removing this for the moment since this concat kernel gives memory error in the server for larger batch sizes
+            # present_kv = ops.concatenate()([full_k_reshaped, full_v_reshaped], dim=0)
+            present_kv = Tensor(shape=[2, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads], dtype="float16")
+            present_kv._bind_data(_NumpyConstantTensorData(np.zeros([2, batch_size, num_heads, past_seq_len + curr_seq_len, hidden_dim // num_heads], dtype=np.float16)))
             
             present_kv._attrs["name"] = clean_name(node.output[1])
             context.add_tensor(present_kv)

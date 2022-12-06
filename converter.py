@@ -460,6 +460,14 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
     # TODO: hack, do this properly
     remove_attention_mask_hack(model)
     modelw = ModelWraper(model)
+    # TODO: should move removing unused cu_length case to a proper place
+    if ("cu_length" in modelw.consumers) and len(modelw.consumers["cu_length"]["cu_length"]) == 0:
+        to_remove = None
+        for init in graph.initializer:
+            if init.name == "cu_length":
+                to_remove = init
+                break
+        graph.initializer.remove(to_remove)
     context = ConverterContext(graph, modelw, attributes)
 
     # some notes

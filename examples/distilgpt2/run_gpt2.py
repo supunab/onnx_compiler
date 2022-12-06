@@ -219,6 +219,7 @@ def run_gpt2(run_original: bool, run_custom: bool, run_ait_generated: bool, benc
             if np.allclose(custom_present_list[i], ort_present_list[i], atol=0.1):
                 logging.info(f"Output present_{i} matched, success!")
             else:
+                logging.warn("Present_x outputs are zerod right now due to an error in concat kernel; see present_kv in registry.py")
                 logging.info(f"Output present_{i} doesn't match!")
     else:
         logging.info("Please specify --run_original --run_custom --run_ait_generated --benchmark")
