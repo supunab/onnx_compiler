@@ -369,6 +369,13 @@ def process_node(node: onnx.NodeProto, context: ConverterContext):
         else:
             output._attrs["name"] = output_name
             context.add_tensor(output)
+
+    elif op_type == "Exp":
+        x = context.get_tensor(node.input[0])
+        output = ops.exp(x)
+        output_name = clean_name(node.output[0])
+        output._attrs["name"] = output_name
+        context.add_tensor(output)
         
     # TODO: need to figure out matmul + activation fusion (does AIT require explicit specialization? --> kinda straightforward to implement this tho?)
 
