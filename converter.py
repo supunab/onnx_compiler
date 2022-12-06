@@ -507,7 +507,7 @@ def compile(model: onnx.ModelProto, output_dir: str = "./tmp", model_name: str =
         # remove any already existing source files (otherwise might silently use prev compilation artifacts 
         # even if the current compile fails)
         full_path = os.path.abspath(os.path.join(output_dir, model_name))
-        subprocess.run(f"cd {full_path} && rm * && cd -", shell=True)
+        subprocess.run(f"cd {full_path} && rm -r * && cd -", shell=True)
 
         compile_model(output, target, output_dir, model_name)
     else:
