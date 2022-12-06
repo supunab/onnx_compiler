@@ -29,7 +29,6 @@ if __name__ == "__main__":
     n_ops = [1, 5, 10, 25, 50, 100]
 
     # some common params
-    ait_build_folder = "./tmp/"
     # ait_path = "/work/AITemplate"
     # onnx_path = "/work/onnxruntime/include/"
     ait_path = "/work/supun/AITemplate/"
@@ -57,7 +56,7 @@ if __name__ == "__main__":
         case_name = f"custom_op_{n}"
         logging.info(f"Running {case_name}")
         # build ait custom op
-        subprocess.run(f"python3 synthetic_cases.py --build --batch_size {batch_size} --hidden_size {hidden_size} -n {n}", shell=True, capture_output=True)
+        subprocess.run(f"python3 synthetic_cases.py --build --batch_size {batch_size} --hidden_size {hidden_size} -n {n} --ait_path {ait_path} --onnx_path {onnx_path}", shell=True, capture_output=True)
         out = subprocess.run(f"python3 synthetic_cases.py --run custom --benchmark --batch_size {batch_size} --hidden_size {hidden_size}", shell=True, capture_output=True)
         append_log(log_file, out.stderr.decode())
         iter_time = parse_time(out.stderr.decode())
