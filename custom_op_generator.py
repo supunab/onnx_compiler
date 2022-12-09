@@ -42,7 +42,7 @@ def generate_makefile(folder: str, onnx_header_path: str, ait_path: str, arch: s
     
 
 # generate the .cu and .h file required for the custom op
-def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True, onnx_header_path: str = "/work/onnxruntime/include/", ait_path: str = "/work/AITemplate/"):
+def generate(context: ConverterContext, folder: str, output_shape: dict = {}, inputs_order: list[int] = None, run_make = True, onnx_header_path: str = "/onnxruntime/include/", ait_path: str = "/AITemplate/"):
     """
     output_shape -> explicitly provide the output_shape when onnx graph is incapable of inferencing
     inputs_order -> HACK! this is to assign the order in which we pass the ait input tensors to ait. Currently, has to manually

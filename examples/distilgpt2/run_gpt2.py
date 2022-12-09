@@ -6,11 +6,9 @@ import torch.utils.benchmark as benchmark
 import time
 import click
 
-shared_lib = "/work/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
-# shared_lib = "/work/supun/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
+shared_lib = "/onnx_compiler/examples/distilgpt2/tmp/distilgpt2/test.so"
 model_path = "distilgpt2_converted.onnx"
-original_model_path = "/work/models/distilgpt2/distilgpt2_fp16.onnx"
-#original_model_path = "/work/supun/models/distilgpt2/distilgpt2_fp16.onnx"
+original_model_path = "/onnx_models/distilgpt2_fp16.onnx"
 
 
 def run_ait(bench: bool, config: dict):

@@ -29,10 +29,8 @@ if __name__ == "__main__":
     n_ops = [1, 5, 10, 25, 50, 100]
 
     # some common params
-    # ait_path = "/work/AITemplate"
-    # onnx_path = "/work/onnxruntime/include/"
-    ait_path = "/work/supun/AITemplate/"
-    onnx_path = "/work/supun/onnxruntime/include/"
+    ait_path = "/AITemplate/"
+    onnx_path = "/onnxruntime/include/"
 
     batch_size = 128
     hidden_size = 262144

@@ -6,15 +6,10 @@ import torch.utils.benchmark as benchmark
 import time
 import click
 
-# shared_lib = "/work/supun/onnx_compiler/test/bert/tmp/bert/test.so"
-shared_lib = "/work/onnx_compiler/examples/bert/tmp/bert/test.so"
+shared_lib = "/onnx_compiler/examples/bert/tmp/bert/test.so"
 model_path = "bert_converted.onnx"
-original_model_path = "/work/models/bert_base/onnx_models/bert_base_cased_3_fp16_gpu.onnx"
-# original_model_path = "/work/supun/models/bert/bert_base_cased_3_fp16_gpu.onnx"
+original_model_path = "/onnx_models/bert_base_cased_3_fp16_gpu.onnx"
 
-
-def _benchmark_ort(session, output_names, input_dict):
-    session.run_with_ort_values(output_names, input_dict)
 
 def run_ait(bench: bool, config: dict):
     from aitemplate.compiler import Model
@@ -139,16 +134,6 @@ def run_onnx(custom_op: bool, bench: bool, config: dict):
         logging.info(f"Elapsed Time: {iter_time}ms")
     output1 = outputs[0].numpy()
     output2 = outputs[1].numpy()
-
-    # do benchmarking
-    # if bench:
-    #     timer = benchmark.Timer(
-    #         stmt="_benchmark_ort(session, output_names, input_dict)",
-    #         setup="from __main__ import _benchmark_ort",
-    #         globals={"session": session, "output_names" : output_names, "input_dict": input_dict}
-    #     )
-    #     timer.timeit(warm_ups) # warm up
-    #     print(f"""{"ORT (AIT Custom Op)" if custom_op else "ORT Original"}: {timer.timeit(repeats)}""")
 
     return (output1, output2, iter_time)
 

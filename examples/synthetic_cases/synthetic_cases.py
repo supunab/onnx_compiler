@@ -117,8 +117,8 @@ def run_ait(benchmark: bool, bs:int, hs: int):
 @click.option("-b", "--batch_size", default=batch_size_default)
 @click.option("-h", "--hidden_size", default=hidden_size_default)
 @click.option("-n", default=num_elementwise_default)
-@click.option("--ait_path", help="location of the AIT sources (to include the headers during compilation) e.g., /work/AITemplate/", default="/work/AITemplate/")
-@click.option("--onnx_path", help="location of onnx headers (e.g., /work/onnxruntime/include/)", default="/work/onnxruntime/include/")
+@click.option("--ait_path", help="location of the AIT sources (to include the headers during compilation) e.g., /AITemplate/", default="/AITemplate/")
+@click.option("--onnx_path", help="location of onnx headers (e.g., /onnxruntime/include/)", default="/onnxruntime/include/")
 def _run(all: bool, make_graph: bool, build: bool, run: str, benchmark: bool, batch_size: int, hidden_size: int, n: int, ait_path: str, onnx_path: str):
     logging.getLogger().setLevel(logging.INFO)
     if all or build or make_graph:

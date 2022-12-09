@@ -33,10 +33,8 @@ if __name__ == "__main__":
 
     # some common params
     ait_build_folder = "./tmp/"
-    # ait_path = "/work/AITemplate"
-    # onnx_path = "/work/onnxruntime/include/"
-    ait_path = "/work/supun/AITemplate/"
-    onnx_path = "/work/supun/onnxruntime/include/"
+    ait_path = "/AITemplate/"
+    onnx_path = "/onnxruntime/include/"
 
 
     data = {} # store the results
