@@ -1,0 +1,38 @@
+# Dockerfile to install AITemplate, ORT and onnx_compiler
+# This also creates bert and distil-gpt2 onnx graphs and put them in default directories
+# Modified version from AITemplate Dockerfile.cuda
+
+FROM nvidia/cuda:11.6.2-devel-ubuntu20.04
+
+# Base scripts
+RUN apt-get update --fix-missing
+RUN apt install -y python3 python3-dev python3-pip
+
+# Environment variables
+ENV PATH=/usr/local/nvidia/bin:${PATH}
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LIBRARY_PATH=/usr/local/cuda/lib64:${LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+ADD ./docker/install/ /Install
+
+# install git to clone repos
+RUN DEBIAN_FRONTEND=noninteractive apt-get -y instal git
+
+# necessary packages
+RUN bash /Install/install_deps.sh
+
+# install Pytorch
+RUN pip3 install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
+
+# install onnxruntime gpu (TODO: should specify a specific version?)
+RUN bash /Install/install_onnxruntime.sh
+
+# copy onnx_compiler sources to docker
+ADD ./onnx_compiler /onnx_compiler
+
+# install AITemplate (from my fork)
+RUN bash /Install/install_ait.sh
+
+# download bert and distilgpt2 onnx models for examples
+RUN bash /Install/download_onnx_models.sh
